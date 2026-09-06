@@ -20,7 +20,7 @@ namespace mm {
 // Layer::extrude fans that single column across x (and z on a cube) on wider layers, so the same
 // code renders a strip or tiles a panel.
 //
-// Prior art: WLED's "Freqmatrix" sound-reactive effect (Andrew Tuline / the WLED SR fork), carried
+// Prior art: WLED's "Freqmatrix" audio-reactive effect (Andrew Tuline / the WLED SR fork), carried
 // into MoonLight (E_MoonModules / MoonModules). The shift-register scroll, the
 // pixVal = level·fx·sensitivity/256 brightness, the 80 Hz / quarter-volume gate, the
 // upperLimit = 80 + 42·highBin / lowerLimit = 80 + 3·lowBin frequency window, and the

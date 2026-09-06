@@ -676,3 +676,30 @@ and confirm that condition is actually present. An agent's shell is a particular
 because it routinely runs with policies, permissions and paths that no user has. Sibling of the
 sabotage rule above: there, force the failure to prove the test sees it; here, prove the test is
 standing in the place where the failure lives.
+
+## A silent watchdog reset is a hardware question before it is a software one (2026-09-06)
+
+`ParallelLedDriver` reset a QuinLED Dig-Next-2 on any pin set: `TG1WDT_SYS_RESET`, both CPUs stopped,
+no panic, no coredump. Six software theories were investigated and every one was wrong: PSRAM (a
+`CONFIG_SPIRAM=n` image hung identically), the ECO3 cache-lock livelock, dual-core (a single-core
+image hung too), an IDF regression, the I2S instance, and the microphone holding the peripheral.
+
+The cause was that the board's ESP32-PICO-V3-02 **has no GPIO 18 or 23**: those package pins are NC
+because their pads serve the in-package flash and PSRAM (datasheet Table 7), and 18/23 were exactly
+the driver's WR/DC defaults. Muxing a peripheral onto an absent pad wedges the flash cache, so the
+chip dies with the watchdog PC parked in `panicHandler` itself: the handler is in IRAM but every
+function it calls is in flash.
+
+**The lesson is the order of investigation.** That signature, a reset with no panic and a PC inside
+the panic handler, means the flash cache is gone, which is a *pin* fault far more often than a code
+fault. Check the package before any software theory: `esptool chip_id` prints it, and
+`esp_efuse_get_pkg_ver()` gives it at runtime. The same die ships in packages with different pins
+bonded, so `GPIO_IS_VALID_GPIO` (which knows the die, not the package) says yes to a pin that does
+not physically exist. Our `gpioCapability` now reads the package and refuses those pins by name.
+
+Two corollaries worth keeping. **Bisect inside the failing call, not around it**: `esp_rom_printf`
+probes placed between the steps of `esp_lcd_new_i80_bus` located the fault in one flash, after a day
+of reasoning from the outside (note the runtime log level is WARN, so `ESP_LOGI` probes are silent).
+And **a differential board settles a chip question fastest**: the same firmware on an Olimex Gateway,
+a plain classic ESP32, worked immediately, which said "this board" rather than "this code" before any
+theory was formed.

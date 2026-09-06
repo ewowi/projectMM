@@ -120,7 +120,7 @@ static_assert(sizeof(kCannon) == static_cast<size_t>(GW) * GH * GF, "cannon: one
 /// @card SpaceInvadersEffect.gif
 class SpaceInvadersEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🎵👾"; }   // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎵👾"; }   // audio-reactive when audioReactive is set
     Dim dimensions() const override { return Dim::D2; }
 
     /// Steps per minute at full strength. The arcade had no such control: its tempo WAS the
@@ -136,14 +136,14 @@ public:
     /// the formation on the beat is the natural mapping rather than an imposed one, and the cannon
     /// fires on a transient. In silence the formation HOLDS: a still invasion is the honest render
     /// of no music, and it is what makes the mode read as reactive.
-    bool soundReactive = false;
+    bool audioReactive = false;
 
     void defineControls() override {
         controls_.addControl("marchBpm", marchBpm, 10, 240);
         controls_.addControl("stepX", stepX, 1, 8);
         controls_.addControl("dropY", dropY, 1, 12);
         controls_.addControl("size", size, 1, 4);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void prepare() override {
@@ -156,7 +156,7 @@ public:
         if (width() == 0 || height() == 0) return;
         draw::fill(cv, RGB{0, 0, 0});
 
-        const AudioFrame* audio = soundReactive ? AudioService::latestFrame() : nullptr;
+        const AudioFrame* audio = audioReactive ? AudioService::latestFrame() : nullptr;
         const bool live = audio && audio->levelSmoothed >= kSilence;
         // A transient is the cannon's trigger, and it is also what makes a beat-driven march step:
         // reading `level` against its own smoothed average is the same beat test the moving-head
@@ -207,7 +207,7 @@ private:
             if (!live) return;                       // silence holds the invasion still
             if (!beat) return;                       // the beat is the clock
         } else {
-            formation_.advance(elapsed(), stepInterval());
+            formation_.advanceTo(elapsed(), stepInterval());
             const uint32_t phase = formation_.phase(2);
             if (phase == lastPhase_) return;
             lastPhase_ = phase;

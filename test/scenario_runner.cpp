@@ -26,6 +26,7 @@
 #include "light/effects/FluidEffect.h"
 #include "light/effects/NebulaEffect.h"
 #include "light/effects/TrailsEffect.h"
+#include "light/effects/ColorTrailsEffect.h"
 #include "light/effects/PolarNoiseEffect.h"
 #include "light/effects/SpiralEffect.h"
 #include "light/effects/RingsEffect.h"
@@ -42,6 +43,9 @@
 #include "core/SystemModule.h"
 #include "core/AudioService.h"
 #include "light/effects/AudioVolumeEffect.h"
+#include "light/effects/RadialSpectrumEffect.h"
+#include "light/effects/VuMetersEffect.h"
+#include "light/effects/BeatRipplesEffect.h"
 #include "light/effects/AudioSpectrumEffect.h"
 #include "light/effects/GameOfLifeEffect.h"
 #include "light/effects/GEQ3DEffect.h"
@@ -228,6 +232,7 @@ static void registerScenarioTypes() {
     mm::ModuleFactory::registerType<mm::FluidEffect>("FluidEffect");
     mm::ModuleFactory::registerType<mm::NebulaEffect>("NebulaEffect");
     mm::ModuleFactory::registerType<mm::TrailsEffect>("TrailsEffect");
+    mm::ModuleFactory::registerType<mm::ColorTrailsEffect>("ColorTrailsEffect");
     mm::ModuleFactory::registerType<mm::PolarNoiseEffect>("PolarNoiseEffect");
     mm::ModuleFactory::registerType<mm::SpiralEffect>("SpiralEffect");
     mm::ModuleFactory::registerType<mm::RingsEffect>("RingsEffect");
@@ -244,6 +249,9 @@ static void registerScenarioTypes() {
     mm::ModuleFactory::registerType<mm::SystemModule>("SystemModule");
     mm::ModuleFactory::registerType<mm::AudioService>("AudioService");
     mm::ModuleFactory::registerType<mm::AudioVolumeEffect>("AudioVolumeEffect");
+    mm::ModuleFactory::registerType<mm::RadialSpectrumEffect>("RadialSpectrumEffect");
+    mm::ModuleFactory::registerType<mm::VuMetersEffect>("VuMetersEffect");
+    mm::ModuleFactory::registerType<mm::BeatRipplesEffect>("BeatRipplesEffect");
     mm::ModuleFactory::registerType<mm::AudioSpectrumEffect>("AudioSpectrumEffect");
     mm::ModuleFactory::registerType<mm::GameOfLifeEffect>("GameOfLifeEffect");
     mm::ModuleFactory::registerType<mm::GEQ3DEffect>("GEQ3DEffect");

@@ -9,7 +9,7 @@ namespace mm {
 /// @card SpiralEffect.png
 class SpiralEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🦅🖌️"; }  // MoonLight origin · David Jupijn / Rising Step
+    const char* tags() const override { return "💫🦅🖌️🎡"; }  // MoonLight origin · David Jupijn / Rising Step
     // Iterates y and x only; Layer::extrude fills z on 3D layers.
     Dim dimensions() const override { return Dim::D2; }
 
@@ -44,7 +44,7 @@ public:
         uint32_t now = elapsed();
         // Shared accumulator: raw dt·rate in 64 bits, divided only at the read, so a sub-millisecond
         // frame does not round to zero and freeze the animation (mm::BeatPhase owns that rule now).
-        phase_.advance(now, bpm);
+        phase_.advanceTo(now, bpm);
         // Accumulate the raw (dt * bpm) product; divide only at the read site.
         // Per-tick `dt*bpm*256/60000` rounds to 0 on desktop (dt ≈ 0..1ms) and
         // freezes the animation; see MetaballsEffect for the same fix.

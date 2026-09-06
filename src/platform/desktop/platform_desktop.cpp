@@ -1930,7 +1930,7 @@ bool rmtWs2812Transmit(RmtWs2812Handle& h, const uint32_t* symbols,
     if (!h.impl || !symbols || symbolCount == 0) return false;
     return true;
 }
-void rmtWs2812Wait(RmtWs2812Handle& /*h*/, uint32_t /*timeoutMs*/) {}
+bool rmtWs2812Wait(RmtWs2812Handle& /*h*/, uint32_t /*timeoutMs*/) { return true; }
 void rmtWs2812Deinit(RmtWs2812Handle& h) {
     delete static_cast<HostRmt*>(h.impl);
     h.impl = nullptr;
@@ -2007,6 +2007,8 @@ void freeHostBus(void*& impl) {
 
 }  // namespace
 
+const char* i80Ws2812LastError() { return nullptr; }   // the emulated bus never refuses for a cause
+bool i80Ws2812SharedBusFree() { return false; }        // and shares no peripheral, so never retries
 bool i80Ws2812Init(I80Ws2812Handle& h, const uint16_t* /*dataPins*/,
                    uint8_t /*laneCount*/, uint16_t /*wrGpio*/, uint16_t /*dcGpio*/,
                    size_t bufferBytes, bool wantSecondBuffer,

@@ -104,7 +104,7 @@ class FlyingToastersEffect : public EffectBase {
 public:
     static constexpr uint8_t kPool = 20;   // 12 toasters + 8 toast, the control maxima
 
-    const char* tags() const override { return "💫🎶✨👾"; }  // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎶✨👾"; }  // audio-reactive when audioReactive is set
     Dim dimensions() const override { return Dim::D2; }
 
     /// How many of each fly, and how fast the flock drifts.
@@ -112,14 +112,14 @@ public:
     uint8_t toast    = 3;
     uint8_t speed    = 96;
     uint8_t spriteSize = 0;   // 0 = auto: scale with the grid; both toasters and toast use it
-    bool soundReactive = false;  // move to the music: each sprite on its own band, still in silence
+    bool audioReactive = false;  // move to the music: each sprite on its own band, still in silence
 
     void defineControls() override {
         controls_.addControl("toasters", toasters, 1, 12);
         controls_.addControl("toast", toast, 0, 8);
         controls_.addControl("speed", speed, 1, 255);
         controls_.addControl("spriteSize", spriteSize, 0, 12);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void prepare() override {
@@ -160,10 +160,10 @@ public:
         draw::fill(cv, RGB{0, 0, 0});
 
         const uint32_t scale = time_.advance(elapsed());
-        if (scale > 0) pool_.stepDriven(scale, soundReactive, wanted());
+        if (scale > 0) pool_.stepDriven(scale, audioReactive, wanted());
 
         // The wing flap: one shared BeatPhase, offset per toaster so the flock never syncs.
-        flap_.advance(elapsed(), 180);   // ~3 flaps per second across the 4-frame cycle
+        flap_.advanceTo(elapsed(), 180);   // ~3 flaps per second across the 4-frame cycle
 
         for (uint16_t i = 0; i < pool_.count; i++) {
             if (!pool_.ttl[i]) continue;

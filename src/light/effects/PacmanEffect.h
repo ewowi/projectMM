@@ -123,7 +123,7 @@ class PacmanEffect : public EffectBase {
 public:
     static constexpr uint8_t kPool = 12;
 
-    const char* tags() const override { return "💫🎶✨👾"; }  // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎶✨👾"; }  // audio-reactive when audioReactive is set
     Dim dimensions() const override { return Dim::D2; }
 
     /// How many of each, and how fast they travel.
@@ -131,14 +131,14 @@ public:
     uint8_t ghosts = 4;       // the arcade cast: Blinky, Pinky, Inky, Clyde
     uint8_t speed  = 96;
     uint8_t spriteSize = 0;   // 0 = auto: scale with the grid
-    bool soundReactive = false;  // move to the music: each sprite on its own band, still in silence
+    bool audioReactive = false;  // move to the music: each sprite on its own band, still in silence
 
     void defineControls() override {
         controls_.addControl("pacmen", pacmen, 0, 4);
         controls_.addControl("ghosts", ghosts, 0, 8);
         controls_.addControl("speed", speed, 1, 255);
         controls_.addControl("spriteSize", spriteSize, 0, 12);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void prepare() override {
@@ -176,11 +176,11 @@ public:
         draw::fill(cv, RGB{0, 0, 0});
 
         const uint32_t scale = time_.advance(elapsed());
-        if (scale > 0) pool_.stepDriven(scale, soundReactive, wanted());
+        if (scale > 0) pool_.stepDriven(scale, audioReactive, wanted());
 
         // One clock for the chomp AND the ghosts' shuffle: in the arcade they run at the same
         // rate, and a single phase keeps them in step without a second accumulator.
-        chomp_.advance(elapsed(), 420);
+        chomp_.advanceTo(elapsed(), 420);
 
         syncPopulation();
 

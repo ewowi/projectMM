@@ -33,7 +33,7 @@ namespace mm {
 /// Effect: bright dots thrown into a flowing medium, leaving tails the flow carries and bends.
 class TrailsEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🖌️"; }   // power-function showcase
+    const char* tags() const override { return "💫🖌️💨🌫️"; }   // power-function showcase
     Dim dimensions() const override { return Dim::D3; }   // per-slice: each slice gets its own flow
 
     static constexpr uint8_t kMaxDots = 8;
@@ -101,7 +101,10 @@ public:
         bank_.set(1, {.rate = 7, .low = static_cast<int32_t>(256 - breathe),
                       .high = static_cast<int32_t>(256 + breathe),
                       .phaseOffset = 0, .wave = Wave::Sine});
-        bank_.advance(dt);
+        // advanceTo() takes an ABSOLUTE timestamp and computes its own delta (math16.h BeatPhase),
+        // so passing this frame's dt feeds it the CHANGE in frame time: a few percent of the right
+        // motion on a jittery device, and none at all where the frame time is steady.
+        bank_.advanceTo(now);
 
         // Which buffer currently HOLDS the trail alternates: a ScratchBuffer is deliberately fixed
         // to its module (non-movable, it owns a slot in the module's free list), so the ping-pong

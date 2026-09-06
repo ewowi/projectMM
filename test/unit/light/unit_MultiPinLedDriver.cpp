@@ -256,6 +256,73 @@ TEST_CASE("MultiPinLedDriver drives any pin count; the bus rounds up around it")
     // (0 pins → idles: covered by "MultiPinLedDriver with the empty default pins idles cleanly" above.)
 }
 
+// WR and DC are lines the LEDs never read, so what an UNSET one costs is the chip's business:
+// the classic ESP32 sinks it onto an input-only pad (no GPIO spent), the LCD_CAM chips need a real
+// pad because an invalid number reaches the ROM's matrix routine. The desktop emulates the LCD_CAM
+// backend, so here an unset WR idles the driver with a status that names the chip's rule.
+TEST_CASE("MultiPinLedDriver idles with a named status when DC is unset, on every chip") {
+    mm::I80Peripheral peripheral;
+    mm::ParallelLedDriver d;
+    mm::Buffer src;
+    mm::Correction corr;
+    d.setPeripheralForTest(&peripheral);
+    REQUIRE(src.allocate(64, 3));
+    mm::test::rebuildFromPreset(corr, 255, mm::test::PresetOrder::GRB);
+    d.defineControls();
+    mm::test::setControlValue<int8_t>(d, "clockPin", 20);
+    mm::test::setControlValue<int8_t>(d, "dcPin", -1);
+    std::strcpy(d.pins, "1,2,4");
+    wire(d, peripheral, src, corr, 64);
+    CHECK(d.severity() == mm::MoonModule::Severity::Error);
+    // DC is toggled in software every frame (esp_lcd calls gpio_set_level on it), which a pad with
+    // no output driver cannot do: the call fails, logs, and the log aborts. So unlike WR it can
+    // never be sunk, and the driver says why.
+    CHECK(std::strstr(d.status() ? d.status() : "", "needs a real GPIO") != nullptr);
+}
+
+TEST_CASE("MultiPinLedDriver on an LCD_CAM chip idles with a named status when WR is unset") {
+    mm::I80Peripheral peripheral;
+    mm::ParallelLedDriver d;
+    mm::Buffer src;
+    mm::Correction corr;
+    d.setPeripheralForTest(&peripheral);
+    REQUIRE(src.allocate(64, 3));
+    mm::test::rebuildFromPreset(corr, 255, mm::test::PresetOrder::GRB);
+    d.defineControls();
+    mm::test::setControlValue<int8_t>(d, "clockPin", -1);
+    mm::test::setControlValue<int8_t>(d, "dcPin", 21);
+    std::strcpy(d.pins, "1,2,4");
+    wire(d, peripheral, src, corr, 64);
+    CHECK(d.severity() == mm::MoonModule::Severity::Error);
+    CHECK(std::strstr(d.status() ? d.status() : "", "needs a write-strobe GPIO") != nullptr);
+}
+
+// A pin the PACKAGE lacks fails the same silent way a flash pin does: the ESP32-PICO-V3-02 has no
+// GPIO 18/23, and routing the i80 clock there wedged its flash cache with no panic. The platform
+// knows the package; the driver must refuse by name before the peripheral touches the pad.
+TEST_CASE("MultiPinLedDriver refuses a WR/DC pin this chip package does not have") {
+    mm::platform::GpioCapability absent;
+    absent.validGpio = false;
+    mm::platform::setTestGpioCapability(20, absent);
+    {
+        mm::I80Peripheral peripheral;
+        mm::ParallelLedDriver d;
+        mm::Buffer src;
+        mm::Correction corr;
+        d.setPeripheralForTest(&peripheral);
+        REQUIRE(src.allocate(64, 3));
+        mm::test::rebuildFromPreset(corr, 255, mm::test::PresetOrder::GRB);
+        d.defineControls();
+        mm::test::setControlValue<int8_t>(d, "clockPin", 20);
+        mm::test::setControlValue<int8_t>(d, "dcPin", 21);
+        std::strcpy(d.pins, "1,2,4");
+        wire(d, peripheral, src, corr, 64);
+        CHECK(d.severity() == mm::MoonModule::Severity::Error);
+        CHECK(std::strstr(d.status() ? d.status() : "", "does not exist on this chip package") != nullptr);
+    }
+    mm::platform::clearTestGpioCapability();
+}
+
 // A data lane on the same GPIO as the WR (clockPin) or DC pin is a WARNING, not a
 // blocker: that lane carries the clock/DC waveform instead of pixel data, but on a
 // board that wires all 8/16 lanes yet drives fewer strands, parking WR/DC on an

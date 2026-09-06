@@ -50,7 +50,7 @@ struct Oscillator {
 /// A fixed-size bank of oscillators. `N` is a compile-time count because an effect knows how many
 /// quantities it animates, and a fixed member array costs no allocation and no indirection.
 ///
-/// Usage, once per frame: `bank.advance(elapsed())`, then `bank.value(i)` wherever the value is
+/// Usage, once per frame: `bank.advanceTo(elapsed())`, then `bank.value(i)` wherever the value is
 /// needed, including inside a pixel loop. Configure with `set(i, {...})` in prepare() or whenever a
 /// control changes; a rate change takes effect from that frame without jumping the phase, which is
 /// what live reconfiguration requires.
@@ -68,11 +68,12 @@ public:
     /// Read one oscillator's settings, for a caller that adjusts a single field.
     const Oscillator& get(uint8_t i) const { return osc_[i < N ? i : N - 1]; }
 
-    /// Advance every oscillator by this frame's elapsed time. Call once per frame, before reading.
+    /// Advance every oscillator to the current time. Call once per frame, before reading. Takes
+    /// the CURRENT TIME rather than a frame delta (BeatPhase::advanceTo owns the why).
     /// Each phase accumulates its own dt*rate numerator, so a rate of 0 holds and a rate changed
     /// mid-run continues from where the phase stands (BeatPhase owns the why).
-    void advance(uint32_t elapsedMs) {
-        for (uint8_t i = 0; i < N; i++) phase_[i].advance(elapsedMs, osc_[i].rate);
+    void advanceTo(uint32_t nowMs) {
+        for (uint8_t i = 0; i < N; i++) phase_[i].advanceTo(nowMs, osc_[i].rate);
     }
 
     /// Oscillator `i`'s current phase as an angle16, offset included. The raw cycle position, for a

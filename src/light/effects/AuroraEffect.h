@@ -37,7 +37,7 @@ namespace mm {
 /// Effect: layered noise curtains in polar coordinates, each layer on its own oscillators.
 class AuroraEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🖌️"; }   // power-function showcase
+    const char* tags() const override { return "💫🖌️🌫️🎡"; }   // power-function showcase
     Dim dimensions() const override { return Dim::D3; }  // volumetric: the curtains have depth
 
     static constexpr uint8_t kMaxLayers = 4;
@@ -93,7 +93,7 @@ public:
                       {.rate = static_cast<uint16_t>(rate / 5), .low = -8192, .high = 8192,
                        .phaseOffset = static_cast<angle16>(i * 20000), .wave = Wave::Sine});
         }
-        bank_.advance(elapsed());
+        bank_.advanceTo(elapsed());
 
         const bool table = lut_.ready();
         const int32_t cx = w / 2, cy = h / 2, cz = dep / 2;

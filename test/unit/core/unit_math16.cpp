@@ -96,36 +96,36 @@ TEST_CASE("sin16 and map32 evaluate at compile time") {
 
 TEST_CASE("BeatPhase keeps animating when frames are under a millisecond") {
     BeatPhase p;
-    p.advance(1000, 120);                            // first call only sets the time base
+    p.advanceTo(1000, 120);                            // first call only sets the time base
     CHECK(p.phase(256) == 0);
 
     // 1000 frames of a sub-millisecond dt: a per-tick divide would round each to zero and freeze.
     // (Integer ms means some ticks advance 0 and some 1 — the accumulator must survive both.)
-    for (uint32_t i = 1; i <= 1000; i++) p.advance(1000 + i / 2, 120);
+    for (uint32_t i = 1; i <= 1000; i++) p.advanceTo(1000 + i / 2, 120);
     CHECK(p.phase(256) > 0);
 }
 
 TEST_CASE("BeatPhase advances proportionally to elapsed time and rate") {
     BeatPhase slow, fast;
-    slow.advance(0, 60); fast.advance(0, 120);
-    slow.advance(1000, 60); fast.advance(1000, 120);
+    slow.advanceTo(0, 60); fast.advanceTo(0, 120);
+    slow.advanceTo(1000, 60); fast.advanceTo(1000, 120);
     CHECK(fast.numerator() == 2 * slow.numerator());  // double the rate, double the phase
 
     BeatPhase p;
-    p.advance(0, 60);
-    p.advance(500, 60);
+    p.advanceTo(0, 60);
+    p.advanceTo(500, 60);
     const uint64_t half = p.numerator();
-    p.advance(1000, 60);
+    p.advanceTo(1000, 60);
     CHECK(p.numerator() == 2 * half);                 // double the time, double the phase
 }
 
 TEST_CASE("BeatPhase holds still at rate zero and resets to zero") {
     BeatPhase p;
-    p.advance(0, 120);
-    p.advance(1000, 0);
+    p.advanceTo(0, 120);
+    p.advanceTo(1000, 0);
     CHECK(p.numerator() == 0);
 
-    p.advance(2000, 120);
+    p.advanceTo(2000, 120);
     CHECK(p.numerator() > 0);
     p.reset();
     CHECK(p.numerator() == 0);
@@ -135,13 +135,13 @@ TEST_CASE("BeatPhase holds still at rate zero and resets to zero") {
 // long-running device must not see the phase jump backwards or leap.
 TEST_CASE("BeatPhase survives the millis wrap") {
     BeatPhase p;
-    p.advance(0xFFFFFF00u, 120);
-    p.advance(0xFFFFFF00u + 100u, 120);              // wraps past 2^32
+    p.advanceTo(0xFFFFFF00u, 120);
+    p.advanceTo(0xFFFFFF00u + 100u, 120);              // wraps past 2^32
     const uint64_t afterWrap = p.numerator();
 
     BeatPhase q;
-    q.advance(1000, 120);
-    q.advance(1100, 120);                            // the same 100 ms, no wrap
+    q.advanceTo(1000, 120);
+    q.advanceTo(1100, 120);                            // the same 100 ms, no wrap
     CHECK(afterWrap == q.numerator());
 }
 

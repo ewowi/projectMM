@@ -51,7 +51,7 @@ public:
         const draw::Canvas cv = canvas();
         if (cv.dims.x < 1 || cv.dims.y < 1) return;
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
 
         // Each oscillator reads the phase at ITS OWN rate and wraps in its own 16-bit angle, so
         // every term is continuous across the wrap. Scaling one wrapped angle by 1.3 or 0.8 (the

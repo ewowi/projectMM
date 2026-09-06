@@ -26,7 +26,7 @@ namespace mm {
 /// Effect: a texture-mapped tunnel flying toward a vanishing point.
 class TunnelEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🖌️"; }   // power-function showcase
+    const char* tags() const override { return "💫🖌️🌫️🎡"; }   // power-function showcase
     Dim dimensions() const override { return Dim::D3; }  // volumetric: the wall recedes through depth
 
     uint8_t bpm      = 20;   // how fast the tunnel flies past
@@ -63,7 +63,7 @@ public:
         const draw::Canvas cv = canvas();
         const lengthType w = width(), h = height(), dep = EffectBase::depth();
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const uint32_t t = phase_.phase(65536);
 
         const int32_t cx = w / 2, cy = h / 2, cz = dep / 2;

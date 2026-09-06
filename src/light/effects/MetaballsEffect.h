@@ -46,7 +46,7 @@ public:
         uint32_t now = elapsed();
         // Shared accumulator: raw dt·bpm in 64 bits, divided only at the read, so a sub-millisecond
         // frame does not round to zero and freeze the animation (mm::BeatPhase owns that rule now).
-        phase_.advance(now, bpm);
+        phase_.advanceTo(now, bpm);
         const uint8_t t = static_cast<uint8_t>(phase_.phase(256));
 
         const uint8_t n = count < MAX_BALLS ? count : MAX_BALLS;

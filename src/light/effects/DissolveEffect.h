@@ -49,7 +49,7 @@ public:
         const draw::Canvas cv = canvas();
         const lengthType w = width(), h = height();
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const uint32_t raw = phase_.phase(65536);
 
         // Each complete sweep is one "generation": the generation number seeds the hash, so every

@@ -29,7 +29,7 @@ namespace mm {
 /// Effect: a noise field births light, a curl flow carries it, and the two make a folding cloud.
 class NebulaEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🖌️"; }   // power-function showcase
+    const char* tags() const override { return "💫🖌️💨🌫️"; }   // power-function showcase
     Dim dimensions() const override { return Dim::D3; }   // the flow and the field both carry z
 
     uint8_t speed       = 40;   // how fast the medium moves, and with it the whole cloud
@@ -112,7 +112,10 @@ public:
 
         bank_.set(0, {.rate = static_cast<uint16_t>(4 + speed / 6), .low = 0, .high = 65535,
                       .phaseOffset = 0, .wave = Wave::Saw});
-        bank_.advance(dt);
+        // advanceTo() takes an ABSOLUTE timestamp and computes its own delta (math16.h BeatPhase),
+        // so passing this frame's dt feeds it the CHANGE in frame time: a few percent of the right
+        // motion on a jittery device, and none at all where the frame time is steady.
+        bank_.advanceTo(now);
 
         uint16_t* live = front_ ? planeA_.data() : planeB_.data();
         uint16_t* spare = front_ ? planeB_.data() : planeA_.data();

@@ -60,7 +60,7 @@ public:
         const draw::Canvas cv = canvas();
         if (cv.dims.x < 1 || cv.dims.y < 1) return;
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const uint32_t t = phase_.phase(65536);
 
         // One cell is this many 16.16 units across. `scale` counts tiles over the short side, which

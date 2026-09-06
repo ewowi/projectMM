@@ -26,7 +26,7 @@ namespace mm {
 /// Effect: dye poured into a simulated fluid, carried by the flow the medium itself works out.
 class FluidEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🖌️"; }   // power-function showcase
+    const char* tags() const override { return "💫🖌️🌊💨"; }   // power-function showcase
     Dim dimensions() const override { return Dim::D3; }   // a medium per slice, jets wander in z
 
     static constexpr uint8_t kMaxJets = 4;
@@ -114,7 +114,10 @@ public:
                       {.rate = static_cast<uint16_t>(rate / 4 + 1), .low = 0, .high = 65535,
                        .phaseOffset = static_cast<angle16>(i * 30000), .wave = Wave::Sine});
         }
-        bank_.advance(dt);
+        // advanceTo() takes an ABSOLUTE timestamp and computes its own delta (math16.h BeatPhase),
+        // so passing this frame's dt feeds it the CHANGE in frame time: a few percent of the right
+        // motion on a jittery device, and none at all where the frame time is steady.
+        bank_.advanceTo(now);
 
         uint16_t* live = front_ ? dyeA_.data() : dyeB_.data();
         uint16_t* spare = front_ ? dyeB_.data() : dyeA_.data();

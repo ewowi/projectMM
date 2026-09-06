@@ -23,6 +23,7 @@ idf_component_register(
         "../../src/platform/esp32/platform_esp32_ota.cpp"
         "../../src/platform/esp32/platform_esp32_improv.cpp"
         "../../src/platform/esp32/platform_esp32_rmt.cpp"
+        "../../src/platform/esp32/rmt_hi_vector.S"
         "../../src/platform/esp32/platform_esp32_tasks.cpp"
         "../../src/platform/esp32/platform_esp32_worker.cpp"
         "../../src/platform/esp32/platform_esp32_gpio.cpp"
@@ -53,6 +54,12 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
 # RISC-V targets (P4) place constants inline natively and don't know the flag.
 if(CONFIG_IDF_TARGET_ARCH_XTENSA)
     target_compile_options(${COMPONENT_LIB} PRIVATE -mauto-litpools)
+endif()
+
+# Classic ESP32 only: the level-5 RMT refill vector (rmt_hi_vector.S) overrides a WEAK default, so
+# nothing references its object and the linker would drop it. -u forces the symbol in.
+if(CONFIG_IDF_TARGET_ESP32)
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u ld_include_rmt_hi_vector")
 endif()
 
 # Firmware-variant defines, set by moondeck/build/build_esp32.py via firmware_cmake_args().

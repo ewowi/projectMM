@@ -43,7 +43,7 @@ public:
         // speed 0 freezes: BeatPhase still tracks the time base, so resuming does not jump by the
         // pause. Two scales are read from the ONE accumulator (see ty below) — the reason phase()
         // takes the scale at the read rather than baking it into the accumulate.
-        phase_.advance(elapsed(), speed);
+        phase_.advanceTo(elapsed(), speed);
         const uint8_t t = static_cast<uint8_t>(phase_.phase(256));
         // ty is the y-axis time phase, running ~1.3× t. Reading the SAME accumulator at a different
         // scale (not deriving it from the already-wrapped uint8 t) keeps it CONTINUOUS: computing ty

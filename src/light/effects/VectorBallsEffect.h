@@ -56,7 +56,7 @@ public:
         const draw::Canvas cv = canvas();
         const lengthType w = width(), h = height();
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const uint32_t t = phase_.phase(65536);
         const angle16 yaw   = static_cast<angle16>(t);
         const angle16 pitch = static_cast<angle16>(t * 2 / 3);   // a second axis, so it tumbles

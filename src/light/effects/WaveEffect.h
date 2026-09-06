@@ -24,7 +24,7 @@ namespace mm {
 /// Effect of a travelling wave across the layer.
 class WaveEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫"; }
+    const char* tags() const override { return "💫🌫️"; }
     // D2 — writes the z=0 plane only; Layer::extrude duplicates it across z on a 3D layout.
     Dim dimensions() const override { return Dim::D2; }
 
@@ -76,7 +76,7 @@ public:
         //    jumping by the whole device uptime), and the dt·bpm numerator stays in 64 bits until the
         //    read (so a sub-millisecond frame does not round to zero and freeze).
         const uint32_t now = elapsed();
-        phase_.advance(now, bpm);
+        phase_.advanceTo(now, bpm);
         const uint8_t t = static_cast<uint8_t>(phase_.phase(256));         // uint8 angle (256 = full turn)
         // Color cycles slowly over time: now/50 indexes the active palette via waveColor.
         const uint8_t colorIndex = static_cast<uint8_t>(now / 50);

@@ -23,7 +23,7 @@ namespace mm {
 /// @card PongEffect.gif
 class PongEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🎵👾"; }   // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎵👾"; }   // audio-reactive when audioReactive is set
     Dim dimensions() const override { return Dim::D2; }
 
     /// Rally speed, in ball crossings per minute rather than pixels per frame: the court is a
@@ -42,7 +42,7 @@ public:
     bool spriteBall = false;
     /// Let the music drive the rally: the ball only advances on the beat, so it crosses the court
     /// in time with the track and stands still in silence.
-    bool soundReactive = false;
+    bool audioReactive = false;
 
     void defineControls() override {
         controls_.addControl("rallyBpm", rallyBpm, 5, 200);
@@ -50,7 +50,7 @@ public:
         controls_.addControl("reflex", reflex, 40, 255);
         controls_.addControl("size", size, 1, 4);
         controls_.addControl("spriteBall", spriteBall);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void setup() override {
@@ -63,7 +63,7 @@ public:
         if (width() == 0 || height() == 0) return;
         draw::fill(cv, RGB{0, 0, 0});
 
-        const AudioFrame* audio = soundReactive ? AudioService::latestFrame() : nullptr;
+        const AudioFrame* audio = audioReactive ? AudioService::latestFrame() : nullptr;
         // The same beat test the rest of the project uses: level against its own smoothed average.
         // Reading it once per frame keeps the audio path off the per-pixel work.
         const bool live = audio && audio->levelSmoothed >= kSilence;
@@ -72,18 +72,18 @@ public:
         // Motion by ELAPSED TIME. `rallyBpm` is crossings per minute, so a frame's share of a
         // crossing is the same on a 60 fps board and a 1200 fps desktop: the ball travels the court
         // in the same wall-clock time on both, rather than 20x faster on the quick one.
-        rally_.advance(elapsed(), rallyBpm);
+        rally_.advanceTo(elapsed(), rallyBpm);
         const uint32_t travel = rally_.phase(kCourtScale);
         // The two modes keep two different clocks: free-running counts elapsed time, reactive
         // counts beats. Switching between them mid-rally would hand step() a jump between the two
         // -- the ball teleporting across the court one way, and an unsigned underflow to a
         // four-billion step the other. Rebase both to the current position instead, so the toggle
         // is seamless and the ball carries on from where it is.
-        if (soundReactive != wasReactive_) {
-            wasReactive_ = soundReactive;
+        if (audioReactive != wasReactive_) {
+            wasReactive_ = audioReactive;
             lastTravel_ = travelAt_;
         }
-        if (soundReactive) {
+        if (audioReactive) {
             // On the beat the ball JUMPS a slice of the court and then waits. Silence holds it
             // still, which is what makes the mode read as reactive rather than merely animated.
             if (beat) travelAt_ += kCourtScale / kBeatSteps;

@@ -10,6 +10,27 @@ Effects are built from the shared [power functions](power-functions.md): the dra
 
 ## MoonLight effects
 
+<a id="colortrails"></a>
+
+### ColorTrails 💫🖌️💨🌫️ · 3D
+
+Emitters pouring color into a flow that carries and folds it. What makes this one worth reading is what the flow is NOT: there is no velocity field. One noise value per row shifts that row sideways, one per column shifts that column up or down, and the two shears compose into something that reads as a swirling current. A 128x128 grid is steered by 256 numbers rather than 16k, which is why it runs on hardware where a real solver does not.
+
+Three emitters feed it: circles on an orbit, a Lissajous point tracing a figure that never closes on itself, and the rim of the panel with its hue walking around. The flow pulls the border inward, so it is a source rather than a frame.
+
+- `speed`: how fast the emitters travel.
+- `flow`: how far a row or column is pushed, which is the strength of the current.
+- `flowSpeed`: how fast the flow itself drifts and reverses.
+- `scale`: the flow's spatial frequency: a few broad bands or many fine ones.
+- `persistence`: how long color survives, as a half-life, so a trail is the same length in seconds at any framerate.
+- `colorSpeed`: how fast the emitters walk the palette.
+- `size`: the orbit's radius and the Lissajous figure's reach.
+- `mode`: all three emitters, or one at a time to see what each contributes.
+
+Compare with [Fluid](#fluid): that one solves for pressure and gets vortices forming out of the flow's own history, at roughly twenty passes over the grid against this one's one. Reach for the solver when the medium is the subject, and for this when the subject is the color being carried.
+
+Origin: MoonLight · concept by [Stefan Petrick](https://github.com/StefanPetrick), composition by Jeff (mindful_stone / [4wheeljive](https://github.com/4wheeljive)) in [AuroraPortal](https://github.com/4wheeljive/AuroraPortal/blob/main/src/programs/colorTrails_detail.hpp) · via [MoonLight](https://github.com/MoonModules/MoonLight/blob/main/src/MoonLight/Nodes/Effects/E_FastLED.h)
+
 <a id="distortionwaves"></a>
 
 ### DistortionWaves 💫 · 2D
@@ -208,7 +229,7 @@ Detail: [technical](moxygen/RandomEffect.md)
 
 <a id="rings"></a>
 
-### Rings 💫🦅🖌️ · 2D
+### Rings 💫🦅🖌️🎡 · 2D
 
 <img src="../../assets/light/effects/RingsEffect.gif" width="300" alt="Rings effect preview">
 
@@ -433,7 +454,7 @@ Uses the global palette. Origin: projectMM original; inspired by Atari's Pong (1
 
 <a id="aurora"></a>
 
-### Aurora 💫🖌️ · 3D
+### Aurora 💫🖌️🌫️🎡 · 3D
 
 <img src="../../assets/light/effects/AuroraEffect.gif" width="300" alt="Aurora effect preview">
 
@@ -544,7 +565,7 @@ Origin: projectMM original, on Sébastien Truchet's 1704 tiling and the standard
 
 <a id="fluid"></a>
 
-### Fluid 💫🖌️ · 3D
+### Fluid 💫🖌️🌊💨 · 3D
 
 <img src="../../assets/light/effects/FluidEffect.gif" width="300" alt="Fluid effect preview">
 
@@ -567,7 +588,7 @@ Origin: projectMM original, after Stam 1999 "Stable Fluids"
 
 <a id="nebula"></a>
 
-### Nebula 💫🖌️ · 3D
+### Nebula 💫🖌️💨🌫️ · 3D
 
 <img src="../../assets/light/effects/NebulaEffect.gif" width="300" alt="Nebula effect preview">
 
@@ -587,7 +608,7 @@ Origin: projectMM original, composing the noise-field and curl-flow kernels: the
 
 <a id="trails"></a>
 
-### Trails 💫🖌️ · 3D
+### Trails 💫🖌️💨🌫️ · 3D
 
 <img src="../../assets/light/effects/TrailsEffect.gif" width="300" alt="Trails effect preview">
 
@@ -605,7 +626,7 @@ Origin: projectMM original, in the flow-field idiom (4wheeljive's FlowFields, fr
 
 <a id="tunnel"></a>
 
-### Tunnel 💫🖌️ · 3D
+### Tunnel 💫🖌️🌫️🎡 · 3D
 
 <img src="../../assets/light/effects/TunnelEffect.gif" width="300" alt="Tunnel effect preview">
 
@@ -677,7 +698,7 @@ Origin: projectMM original, on Iñigo Quilez's raymarching and distance-function
 
 <a id="polarnoise"></a>
 
-### PolarNoise 💫🖌️ · 3D
+### PolarNoise 💫🖌️🌫️🎡 · 3D
 
 <img src="../../assets/light/effects/PolarNoiseEffect.gif" width="300" alt="PolarNoise effect preview">
 
@@ -753,7 +774,7 @@ Detail: [technical](moxygen/SphereMoveEffect.md)
 
 <a id="spiral"></a>
 
-### Spiral 💫🦅🖌️ · 2D
+### Spiral 💫🦅🖌️🎡 · 2D
 
 <img src="../../assets/light/effects/SpiralEffect.gif" width="300" alt="Spiral effect preview">
 
@@ -1021,7 +1042,7 @@ Detail: [technical](moxygen/LissajousEffect.md)
 
 <a id="noisemeter"></a>
 
-### NoiseMeter 🐙🎵 · 3D
+### NoiseMeter 🐙🎵🌫️ · 3D
 
 <img src="../../assets/light/effects/NoiseMeterEffect.gif" width="300" alt="NoiseMeter effect preview">
 
@@ -1040,7 +1061,7 @@ Detail: [technical](moxygen/NoiseMeterEffect.md)
 
 <a id="wave"></a>
 
-### Wave 💫 · 2D
+### Wave 💫🌫️ · 2D
 
 <img src="../../assets/light/effects/WaveEffect.gif" width="300" alt="Wave effect preview">
 
@@ -1079,7 +1100,7 @@ Detail: [technical](moxygen/FireEffect.md)
 
 <a id="noise"></a>
 
-### Noise ⚡️💫🌙🐙 · 1D/2D/3D
+### Noise ⚡️💫🌙🐙🌫️ · 1D/2D/3D
 
 <img src="../../assets/light/effects/NoiseEffect.gif" width="300" alt="Noise effect preview">
 
@@ -1112,6 +1133,50 @@ Origin: projectMM original, on the WLED-SR GEQ / spectrum concept (Andrew Tuline
 Detail: [technical](moxygen/AudioSpectrumEffect.md)
 
 [Tests](../../tests/unit-tests.md#audioservice)
+
+<a id="beatripples"></a>
+
+### BeatRipples 💫🎶🖌️ · 2D
+
+Every beat is a stone dropped in water. The surface is a real wave simulation, the classic two-buffer scheme: each cell's next height is its neighbors' average doubled minus its previous height, damped, which is the discrete wave equation. That gives what a drawn expanding circle cannot: ripples that pass THROUGH each other, reflect off the walls and interfere into standing patterns. The loudest band decides where the stone lands, so a bass hit falls near the center and a treble hit out at the rim, and the hit's strength sets how deep. The surface is rendered by SLOPE rather than height, because a water surface is visible where it bends light.
+
+- `damping`: how long the water keeps ringing.
+- `drop`: how deep a beat's stone falls.
+- `rain`: idle drops when there is no music, so the surface is alive in silence.
+- `shine`: how strongly the slope lights the surface.
+
+Origin: projectMM original, the two-buffer water simulation (Gomez 2000) driven by the onset detector
+
+<a id="vumeters"></a>
+
+### VuMeters 💫🎶🖌️ · 3D
+
+Sixteen needles, one per band, each with real mass. What makes a VU meter beautiful is not the dial, it is the needle: a physical meter is a spring and a damper, so it accelerates toward the signal, overshoots a peak, swings back and settles. That overshoot is why a mechanical meter reads as alive where a bar graph reads as a readout, and it is why the standard (IEC 60268-17) specifies 300 ms to 99% with 1 to 1.5% overshoot rather than a smoothing constant.
+
+Each band drives a damped harmonic oscillator integrated per frame, with the bass needles deliberately heavier than the treble ones, as they are on a real meter bridge: the low end swings, the high end flickers. The sixteen meters tile the panel as a grid of cells, as square as the shape allows, so a 64x64 panel is 4x4 dials and a 256x64 wall is 8x2. Each dial has a peak marker held at the highest reading and falling by a half-life, and a red zone past three quarters. On a cube every slice carries its own bank.
+
+- `damping`: how much the needle overshoots. High is a critically damped studio meter, low is a loose needle that swings past and bounces off the pin.
+- `response`: how hard the needle chases the signal at all.
+- `peakHold`: how long the peak marker stays up, as a half-life.
+- `smooth`: drive from the meter ballistic rather than the raw band. Raw is the truer instrument here, since the needle has its own ballistics already.
+
+Origin: projectMM original, on the VU ballistics of IEC 60268-17
+
+<a id="radialspectrum"></a>
+
+### RadialSpectrum 💫🎶🖌️🎡 · 3D
+
+The spectrum as ripples. Each band owns a sector around the center, mirrored left and right with the bass at the top and bottom; sound is born at the center and travels outward, so the radius is time and a ring's length is that band's recent history. It is the circular visualizer the music-video world settled on, a radial spectrogram, and it is also the diagnostic a bar analyzer is: every sector is one band, so a band that is stuck or pinned shows as a sector that never moves or never dims. On a cube, under the spherical mapping, the ripples are expanding shells.
+
+Nothing is transported. The effect keeps a short history of band frames and every light reads it, its angle choosing the band and its radius the age: a table read per light, cheaper than drawing bars.
+
+- `speed`: how fast sound travels outward, a ring every 10 to 105 ms.
+- `persistence`: how far out a ripple stays visible.
+- `smooth`: read the meter ballistic (`bandsSmoothed`) rather than the raw bands. Switching it is the comparison a person tuning the audio path wants: raw twitches, smoothed breathes.
+- `beat`: a white shockwave born at the center on every detected onset, traveling out with the ripples.
+- `polarTable`, `polarTable16`, `mapping`: the polar address, and cylindrical, spherical or radial on a volume (light/polar.h).
+
+Origin: projectMM original, the radial spectrogram on `PolarLut` and the onset detector
 
 <a id="audiovolume"></a>
 

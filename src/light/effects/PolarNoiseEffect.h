@@ -31,7 +31,7 @@ namespace mm {
 /// Effect: a warped, kaleidoscopic noise field in polar coordinates.
 class PolarNoiseEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🖌️"; }   // power-function showcase
+    const char* tags() const override { return "💫🖌️🌫️🎡"; }   // power-function showcase
     Dim dimensions() const override { return Dim::D3; }  // volumetric: the field turns through depth
 
     uint8_t bpm      = 8;    // how fast the field drifts
@@ -71,7 +71,7 @@ public:
         // The drift is an oscillator: a sawtooth that only ever moves forward, which is what makes
         // the field breathe outward rather than rock back and forth.
         drift_.set(0, {.rate = bpm, .low = 0, .high = 65535, .phaseOffset = 0, .wave = Wave::Saw});
-        drift_.advance(elapsed());
+        drift_.advanceTo(elapsed());
         const uint32_t t = drift_.unitValue(0);
 
         // Build the address table if the grid changed; a rebuild is the only frame that pays for it.

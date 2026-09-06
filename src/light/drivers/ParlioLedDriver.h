@@ -41,7 +41,7 @@ public:
     /// Parlio is its own TX peripheral block, distinct from LcdCam/I2S — it coexists with an i80 or
     /// MoonI80 driver on the same chip (the P4 has both).
     LedHwBlock hwBlock() const override { return LedHwBlock::Parlio; }
-    const char* initFailMsg() const override { return "Parlio init failed — check pins / memory"; }
+    const char* initFailMsg() const override { return "Parlio init failed, check pins / memory"; }
 
     // The WS2812 slot rate (375 ns @ 2.67 MHz) — identical to the LCD backend's;
     // the P4 Parlio's 160 MHz PLL clock divides to it exactly (/60).

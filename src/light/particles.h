@@ -170,13 +170,13 @@ inline lengthType spreadLane(uint16_t i, uint16_t slots, lengthType extent) {
 /// Per-sprite audio drive: how fast sprite `i` of `slots` should move for the sound playing now,
 /// as a multiplier of FrameTime::kOne (so 0 = frozen, kOne = its normal speed).
 ///
-/// Shared by every sprite effect with a `soundReactive` checkbox (FlyingToasters, FishTank,
+/// Shared by every sprite effect with a `audioReactive` checkbox (FlyingToasters, FishTank,
 /// Pacman): the behavior a viewer expects is identical in all three, so it is written once.
 ///
 /// Each sprite gets its OWN band, spread across the 16 the FFT produces, so a scene breathes with
 /// the music instead of surging as one block: the bass sprites lurch on the kick while the treble
 /// ones flutter on the hats. The overall level gates it, so SILENCE STANDS THE SCENE STILL - the
-/// requirement that makes the mode read as sound-reactive rather than merely speed-varying, since
+/// requirement that makes the mode read as audio-reactive rather than merely speed-varying, since
 /// a per-band value alone still drifts on noise between tracks.
 ///
 /// Returns kOne unchanged when there is no audio at all (no microphone, service not running), so
@@ -378,19 +378,19 @@ struct Pool {
     }
 
     /// step() with a PER-PARTICLE time scale: `drive(i)` returns particle i's own multiplier of
-    /// FrameTime::kOne. Sound-reactive sprite effects use it to move each sprite on its own audio
+    /// FrameTime::kOne. Audio-reactive sprite effects use it to move each sprite on its own audio
     /// band (see audioDrive) - the whole point being that the sprites do NOT move as one block.
     /// The frame scale still multiplies in, so speed stays frame-rate independent either way.
-    /// step(), optionally driven by the music: with `soundReactive` set, each of the `live`
+    /// step(), optionally driven by the music: with `audioReactive` set, each of the `live`
     /// sprites moves on its own frequency band and the scene stands still in silence; otherwise
-    /// the whole pool steps together. The one place the sound-reactive rule lives, so the sprite
+    /// the whole pool steps together. The one place the audio-reactive rule lives, so the sprite
     /// effects share it rather than each carrying a copy of the branch.
     ///
     /// `live` is the number of sprites actually in play, NOT the pool capacity: the bands are
     /// spread across the sprites that exist, so passing the capacity would crowd every sprite
     /// into the low bands and leave the treble driving nothing.
-    void stepDriven(uint32_t scale, bool soundReactive, uint16_t live) {
-        if (!soundReactive) { step(scale); return; }
+    void stepDriven(uint32_t scale, bool audioReactive, uint16_t live) {
+        if (!audioReactive) { step(scale); return; }
         const AudioFrame* f = AudioService::latestFrame();
         stepEach(scale, [f, live](uint16_t i) { return audioDrive(f, i, live); });
     }

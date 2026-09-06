@@ -87,6 +87,7 @@ add_executable(mm_tests
     unit/light/unit_PanelCardDriver_packet.cpp
     unit/light/unit_WledAudioSyncPacket.cpp
     unit/light/unit_BlendMap.cpp
+    unit/light/unit_BeatRipples.cpp
     unit/light/unit_fluid.cpp
     unit/light/unit_draw.cpp
     unit/light/unit_GameOfLifeEffect.cpp

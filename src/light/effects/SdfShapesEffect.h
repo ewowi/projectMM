@@ -54,7 +54,7 @@ public:
         const draw::Canvas cv = canvas();
         const lengthType w = width(), h = height();
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const angle16 t = static_cast<angle16>(phase_.phase(65536));
 
         // The short side sets the scale, so the composition looks the same on any aspect ratio.

@@ -121,7 +121,7 @@ class FishTankEffect : public EffectBase {
 public:
     static constexpr uint8_t kPool = 24;   // the control maxima, summed
 
-    const char* tags() const override { return "💫🎶✨👾"; }  // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎶✨👾"; }  // audio-reactive when audioReactive is set
     Dim dimensions() const override { return Dim::D2; }
 
     /// How many of each swim, and how fast.
@@ -130,7 +130,7 @@ public:
     uint8_t tiny  = 5;     // the school
     uint8_t speed = 80;
     uint8_t spriteSize = 0;   // 0 = auto: scale with the grid, as FlyingToasters does
-    bool soundReactive = false;  // move to the music: each sprite on its own band, still in silence
+    bool audioReactive = false;  // move to the music: each sprite on its own band, still in silence
 
     void defineControls() override {
         controls_.addControl("fish", fish, 0, 8);
@@ -138,7 +138,7 @@ public:
         controls_.addControl("school", tiny, 0, 8);
         controls_.addControl("speed", speed, 1, 255);
         controls_.addControl("spriteSize", spriteSize, 0, 12);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void prepare() override {
@@ -179,10 +179,10 @@ public:
         draw::fill(cv, RGB{0, 0, 0});
 
         const uint32_t scale = time_.advance(elapsed());
-        if (scale > 0) pool_.stepDriven(scale, soundReactive, wanted());
+        if (scale > 0) pool_.stepDriven(scale, audioReactive, wanted());
 
         // One shared tail-beat clock, offset per fish so the tank never pulses in unison.
-        beat_.advance(elapsed(), 200);
+        beat_.advanceTo(elapsed(), 200);
 
         syncPopulation();
 

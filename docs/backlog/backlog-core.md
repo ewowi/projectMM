@@ -2,6 +2,19 @@
 
 Forward-looking to-build items for the **core / infrastructure** domain (`src/core/`, `src/platform/`, build, CI, network, persistence, UI). The light-domain counterpart is [backlog-light.md](backlog-light.md); items that genuinely span both are in [backlog-mixed.md](backlog-mixed.md). Index + overview: [README.md](README.md). Completed items are removed.
 
+### The audio-sync test waits on the wall clock (2026-09-06)
+
+`test/unit/core/unit_AudioService_sync.cpp` drives the quiet-packet case with `platform::delayMs(1)`
+inside a 100-iteration polling loop, so the assertion that `level` reaches zero depends on real
+elapsed time and on loopback UDP delivering within that window. It passes today and has not been
+seen to flake, but it is the shape that produces a rare CI failure nobody can reproduce, and it
+spends real milliseconds in a suite that otherwise runs on a test clock.
+
+The fix is the deterministic UDP seam plus `platform::setTestNowMs`, the same pattern every other
+timing test here uses: feed the packet, advance the clock explicitly, assert. Raised by CodeRabbit
+on PR #96 and deliberately not taken in that pass: it is pre-existing rather than part of that
+diff, and swapping a test's transport is a change that wants its own verification.
+
 ## Distribution
 
 ### OTA upload refuses a normal client: the body must arrive within ~50 ms (2026-09-02)

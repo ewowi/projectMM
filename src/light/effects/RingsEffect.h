@@ -14,7 +14,7 @@ namespace mm {
 /// @card RingsEffect.gif
 class RingsEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🦅🖌️"; }  // MoonLight origin · David Jupijn / Rising Step
+    const char* tags() const override { return "💫🦅🖌️🎡"; }  // MoonLight origin · David Jupijn / Rising Step
     // Iterates y and x only; Layer::extrude fills z on 3D layers.
     Dim dimensions() const override { return Dim::D2; }
 

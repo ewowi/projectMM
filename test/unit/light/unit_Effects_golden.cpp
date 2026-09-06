@@ -14,7 +14,7 @@
 // @also NebulaEffect, NoiseEffect, PacmanEffect, PlasmaEffect, PolarNoiseEffect, PraxisEffect,
 // @also RainbowEffect, RingsEffect, RubiksCubeEffect, SdfShapesEffect, SineEffect, SolidEffect,
 // @also SphereMoveEffect, SpiralEffect, StarFieldEffect, StarSkyEffect, TetrixEffect, TextEffect,
-// @also TrailsEffect, TruchetEffect, TunnelEffect, WaterRippleEffect, WaveEffect
+// @also RadialSpectrumEffect, VuMetersEffect, TrailsEffect, TruchetEffect, TunnelEffect, WaterRippleEffect, WaveEffect
 
 // Pins the EXACT rendered output of the time-driven effects, so the power-function migration's
 // "renders exactly the same" claim is proved rather than asserted.
@@ -74,6 +74,8 @@
 #include "light/effects/WaterRippleEffect.h"
 #include "light/effects/FluidEffect.h"
 #include "light/effects/NebulaEffect.h"
+#include "light/effects/RadialSpectrumEffect.h"
+#include "light/effects/VuMetersEffect.h"
 #include "light/effects/TrailsEffect.h"
 #include "light/effects/TunnelEffect.h"
 #include "light/effects/EchoEffect.h"
@@ -128,9 +130,11 @@ TEST_CASE("time-driven effects render byte-identical frames (migration guard)") 
     SUBCASE("two SDF shapes orbit and melt together, with a soft edge")       { SdfShapesEffect e;       golden::checkGolden("SdfShapesEffect", golden::renderHash(e, 16, 16, 1), 0xbcfb74b4836606a3ull); }
     SUBCASE("a warped noise field folded into a kaleidoscope")      { PolarNoiseEffect e;      golden::checkGolden("PolarNoiseEffect", golden::renderHash(e, 16, 16, 1), 0x8d48e0d1e0180610ull); }
     SUBCASE("heat rises, cools and colors through the palette")      { FireEffect e;            golden::checkGolden("FireEffect", golden::renderHash(e, 16, 16, 1), 0x1cadbabb59bc489bull); }
-    SUBCASE("dye poured into a simulated medium, carried by the flow it works out") { FluidEffect e; golden::checkGolden("FluidEffect", golden::renderHash(e, 16, 16, 1), 0xdef67ab1f131e137ull); }
-    SUBCASE("a field births light and a curl flow carries it into a cloud")          { NebulaEffect e; golden::checkGolden("NebulaEffect", golden::renderHash(e, 16, 16, 1), 0xc42116cc9f9cc33full); }
-    SUBCASE("dots thrown into a flow, leaving tails it carries and bends") { TrailsEffect e; golden::checkGolden("TrailsEffect", golden::renderHash(e, 16, 16, 1), 0x77993423ebe2f58cull); }
+    SUBCASE("dye poured into a simulated medium, carried by the flow it works out") { FluidEffect e; golden::checkGolden("FluidEffect", golden::renderHash(e, 16, 16, 1), 0x46f503452c0435efull); }
+    SUBCASE("a field births light and a curl flow carries it into a cloud")          { NebulaEffect e; golden::checkGolden("NebulaEffect", golden::renderHash(e, 16, 16, 1), 0x6cefd6a2f242aeafull); }
+    SUBCASE("sixteen VU needles with mass, one per band") { VuMetersEffect e; golden::checkGolden("VuMetersEffect", golden::renderHash(e, 16, 16, 1), 0x4c9ddf61e3f3bf78ull); }
+    SUBCASE("the spectrum as ripples, one sector per band, radius as time") { RadialSpectrumEffect e; golden::checkGolden("RadialSpectrumEffect", golden::renderHash(e, 16, 16, 1), 0xf76a40a372582783ull); }
+    SUBCASE("dots thrown into a flow, leaving tails it carries and bends") { TrailsEffect e; golden::checkGolden("TrailsEffect", golden::renderHash(e, 16, 16, 1), 0x2f9b1de2ed8382beull); }
     SUBCASE("layered noise curtains, each drifting on its own clock")      { AuroraEffect e;          golden::checkGolden("AuroraEffect", golden::renderHash(e, 16, 16, 1), 0xfb4329a20959443dull); }
     SUBCASE("drops ripple, reflect off the edges and interfere")     { WaterRippleEffect e;     golden::checkGolden("WaterRippleEffect", golden::renderHash(e, 16, 16, 1), 0xa11f9c4f27cba8d5ull); }
     SUBCASE("a texture-mapped tunnel flying toward a vanishing point")          { TunnelEffect e;          golden::checkGolden("TunnelEffect", golden::renderHash(e, 16, 16, 1), 0x7b4d4451a3de3887ull); }

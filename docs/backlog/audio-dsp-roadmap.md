@@ -42,6 +42,14 @@ His contribution has two parts:
   composes cleanly with the adaptive gate below (a learned gate on a cleanly-filtered signal beats one
   on a raw signal).
 
+**LedFx** (Python, host-side) — a network LED effect engine whose whole purpose is audio reactivity,
+running on a PC and streaming pixels to WLED-class devices. Different architecture to ours (the host
+renders, the device receives; we already interoperate through Art-Net / E1.31 / DDP in both
+directions), so most of it does not transfer. Two pieces of its *analysis* do, and both are studied
+in § Band spacing below: its **mel/bark band spacing** with hand-tuned variants, and its
+**per-band asymmetric smoothing**. Worth naming because it reached those two independently of the
+WLED lineage above, and its own source comments are unusually candid about which variants work.
+
 **Damian Schneider (DedeHai)** — WLED core dev; WLED's audioreactive usermod carries an integer /
 fixed-point FFT path (~1.5 ms on a C3, >10× ArduinoFFT on FPU-less chips). The consensus (Troy + Frank)
 is that with esp-dsp FFT + biquads, **fixed-point is not necessary on FPU chips** (S3/P4) — projectMM's
@@ -74,8 +82,13 @@ codec work leaves room for that class of source.
 
 ## Adaptive noise gate (softhack007's concept, our analysis)
 
-Replace the borrowed `squelch`/`noiseFloor` knob ("a WLED-SR workaround, not a real gate") with a
-proper adaptive noise gate. From softhack007 (granted permission to analyse); the assessment is ours.
+**Partly built.** `floor` is now a real silence threshold on both the level and the band paths: below
+it a band reads zero AND is not learned from, which is what stopped the learner amplifying an empty
+room to full scale. What remains from the design below is the ADAPTIVE half: hysteresis, the
+asymmetric open-fast/close-slow timing, and a learned threshold rather than a set one.
+
+The original framing, kept because the remaining work is judged against it: replace the borrowed
+`squelch`/`noiseFloor` knob ("a WLED-SR workaround, not a real gate") with a proper adaptive gate. From softhack007 (granted permission to analyse); the assessment is ours.
 
 **The concept:** a standard [noise gate](https://en.wikipedia.org/wiki/Noise_gate) (below a threshold
 the signal is silenced, above it passes), **asymmetric bang-bang timing** (open fast, close slow;

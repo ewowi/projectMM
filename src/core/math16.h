@@ -119,17 +119,23 @@ constexpr int32_t map32(int32_t v, int32_t inLo, int32_t inHi, int32_t outLo, in
 /// silently freezes. The fix all nine converged on is to accumulate the RAW numerator in 64 bits and
 /// divide only at the read: which is what this does.
 ///
-/// Usage: one member per animated quantity; call `advance(elapsedMs, rate)` once per frame, then
+/// Usage: one member per animated quantity; call `advanceTo(nowMs, rate)` once per frame, then
 /// read as often as needed. `rate` is BPM-like: the caller's speed control, whatever its units.
 class BeatPhase {
 public:
     /// Accumulate this frame's contribution. Safe to call with a rate of 0 (the phase holds).
     /// The first call only establishes the time base, so a large `elapsed` at startup cannot jump
     /// the phase: the same first-tick guard three of the nine effects carried by hand.
-    void advance(uint32_t elapsedMs, uint32_t rate) {
-        if (!started_) { started_ = true; lastMs_ = elapsedMs; return; }
-        const uint32_t dt = elapsedMs - lastMs_;   // unsigned: correct across the millis() wrap
-        lastMs_ = elapsedMs;
+    ///
+    /// Takes the CURRENT TIME, not a frame delta: the delta is computed here. Named `advanceTo`
+    /// for that reason, because `advance(dt)` reads naturally and is wrong, which four of five
+    /// oscillator callers wrote before the name said otherwise. Passing a delta feeds this the
+    /// change in frame time, so the phase creeps on a jittery device and stops dead on a steady
+    /// one; the effects it drove looked frozen while every test stayed green.
+    void advanceTo(uint32_t nowMs, uint32_t rate) {
+        if (!started_) { started_ = true; lastMs_ = nowMs; return; }
+        const uint32_t dt = nowMs - lastMs_;       // unsigned: correct across the millis() wrap
+        lastMs_ = nowMs;
         num_ += static_cast<uint64_t>(dt) * rate;
     }
 
@@ -325,6 +331,20 @@ constexpr uint8_t smoothFollow(uint8_t current, uint8_t target, uint8_t rate) {
     const int32_t step = (delta * rate) / 256;
     if (step != 0) return static_cast<uint8_t>(current + step);
     return static_cast<uint8_t>(current + (delta > 0 ? 1 : -1));
+}
+
+/// A meter's ballistic: rise at one rate, fall at another. `smoothFollow` with two time constants.
+///
+/// A follower with a single rate is the wrong instrument for anything reactive: it makes the attack
+/// as sluggish as the decay and rounds off the transient the effect exists to show. Every meter
+/// standard separates the two, and a broadcast peak programme meter (PPM, IEC 60268-10) is the
+/// shape wanted here: rise almost at once, fall over a comfortable time so the eye can read the
+/// peak. WLED, FastLED and LedFx each arrived at the same asymmetric form independently.
+///
+/// `rise` and `fall` are `smoothFollow` rates (0 = frozen, 255 = instant). Equal values reduce to
+/// `smoothFollow` exactly, so this is a superset rather than a second mechanism.
+constexpr uint8_t ballistic(uint8_t current, uint8_t target, uint8_t rise, uint8_t fall) {
+    return smoothFollow(current, target, target > current ? rise : fall);
 }
 
 /// The falling-peak meter: rise INSTANTLY to a new high, then decay slowly. The asymmetry is the

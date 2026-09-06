@@ -1244,7 +1244,7 @@ function showUpdateOverlay() {
         // A URL install hears POST /cancel; a file upload cancels by dropping its connection
         // (MoonBase's single-connection server is busy receiving it), so abort the fetch.
         if (uploadCtl) uploadCtl.abort();
-        fetch("/cancel", { method: "POST" }).catch(() => {});
+        fetch("/api/firmware/cancel", { method: "POST" }).catch(() => {});
     });
     box.append(h, msg, bar, cancel, dismiss);
     ov.appendChild(box);
@@ -1328,7 +1328,7 @@ async function moonbaseUpdateFlow(opts) {
             const uploadCtl = new AbortController();
             ui.setUpload(uploadCtl);
             try {
-                const r = await fetch("/install", {
+                const r = await fetch("/api/firmware/upload", {
                     method: "POST", headers: { "Content-Type": "application/octet-stream" },
                     body: opts.file, signal: uploadCtl.signal });
                 if (!r.ok) throw new Error(await r.text());
@@ -1380,9 +1380,9 @@ async function moonbaseUpdateFlow(opts) {
                 ui.status("The install was interrupted \u2014 retrying\u2026");
                 try {
                     if (opts.url) {
-                        await fetch("/install-url", { method: "POST", body: opts.url });
+                        await fetch("/api/firmware/url", { method: "POST", body: opts.url });
                     } else {
-                        await fetch("/install", {
+                        await fetch("/api/firmware/upload", {
                             method: "POST", headers: { "Content-Type": "application/octet-stream" },
                             body: opts.file });
                     }
@@ -1558,11 +1558,11 @@ function createCard(mod, depth) {
 
     // Emoji tags (role + curated) shown after the name: same set used by the
     // type picker's chip filter, so visual identity is consistent across views.
-    const emoji = emojiTagsForMod(mod);
-    if (emoji) {
+    const emojiList = emojiListForMod(mod);
+    if (emojiList.length) {
         const emojiEl = document.createElement("span");
         emojiEl.className = "card-name-emoji";
-        emojiEl.textContent = emoji;
+        renderEmojiTags(emojiEl, emojiList);
         title.appendChild(emojiEl);
     }
 
@@ -2106,10 +2106,25 @@ function docPathForType(moduleType) {
 // loaded, so two MoonLive effects running different scripts read differently while sharing one
 // entry in /api/types: the audio one shows 🎶, the moving-head one 🎯. A compiled module sends
 // nothing here and keeps its type's answer.
-function emojiTagsForMod(mod) {
-    if (!mod) return "";
+/// The same set as an array, for the callers that render one span per emoji.
+function emojiListForMod(mod) {
+    if (!mod) return [];
     const t = availableTypes.find(t => t.name === mod.type) || {role: mod.role, tags: ""};
-    return emojiTagsFor(mod.tags ? {...t, tags: mod.tags} : t).join("");
+    return emojiTagsFor(mod.tags ? {...t, tags: mod.tags} : t);
+}
+
+/// Fill `el` with one span per emoji, each carrying its own tooltip. A tooltip belongs to a single
+/// character, so the emoji cannot be one joined string. Both the card header and the picker rows
+/// render through here, which is what keeps a chip explained the same way wherever it appears.
+function renderEmojiTags(el, list) {
+    el.textContent = "";
+    for (const ch of list) {
+        const one = document.createElement("span");
+        one.textContent = ch;
+        const label = EMOJI_LABEL[ch];
+        if (label) one.title = label;
+        el.appendChild(one);
+    }
 }
 
 // Whether a control appears in the generic control list: false for controls the module marked
@@ -5156,14 +5171,74 @@ const SCRIPTED_EMOJI = "\u{1F4DD}";      // 📝 the module runs a MoonLive scri
 // Not the gear: that is already the `generic` role's emoji, and reusing it drew the chip twice.
 const COMPILED_EMOJI = "\u{1F4E6}";      // 📦 chip only: never a tag any module carries
 
+// The POWER-FUNCTION tags: which kernels an effect is built on, rather than where it came from or
+// what it listens to. They are ordered LAST and kept together so they read as one group on a card
+// and sit adjacent in the picker's chip row, which is what makes "show me the fluid effects" a
+// glanceable filter rather than a hunt through a mixed string. A separator character is not used:
+// every chip is one grapheme, so a separator would become a chip of its own.
+// What an effect LISTENS to. Their own group in the picker: "show me the effects that react to
+// music" is the question a chip row is for, and the two notes answer it together.
+const AUDIO_EMOJI = ["\u{1F3B5}", "\u{1F3B6}"];   // volume, frequency
+
+const KERNEL_EMOJI = ["🖌️", "✨", "🌊", "💨", "🌫️", "🎡"];   // same order the legend lists them in
+
+// What each chip MEANS, as a tooltip. The chips are a filter, so a reader who does not yet know the
+// vocabulary has to guess what narrows the list; the title makes each one self-describing without
+// spending any screen space. Wording follows the legend that documents them for people reading a
+// card: docs/tutorials/how-projectmm-works.md, "The emoji on every card".
+const EMOJI_LABEL = {
+    // what the module IS
+    "\u{1F525}": "effect",
+    "\u2638\uFE0F": "driver",
+    "\u{1F48E}": "modifier",
+    "\u{1F6A5}": "layout",
+    "\u{1F95E}": "layer",
+    "\u{1F6F0}\uFE0F": "service",
+    "\u2699\uFE0F": "generic",
+    [SCRIPTED_EMOJI]: "runs a MoonLive script",
+    [COMPILED_EMOJI]: "compiled into the firmware",
+    // the shape it works in
+    "\u{1F4CF}": "1D: a line",
+    "\u{1F7E6}": "2D: a picture",
+    "\u{1F9CA}": "3D: a volume",
+    // where it came from
+    "\u{1F4AB}": "projectMM / MoonLight",
+    "\u{1F319}": "MoonModules",
+    "\u{1F419}": "WLED",
+    "\u26A1\uFE0F": "FastLED",
+    "\u{1F985}": "a named contributor",
+    // what it listens to and what it does
+    "\u{1F3B5}": "reacts to volume: how loud the room is",
+    "\u{1F3B6}": "reacts to frequency: which notes are playing",
+    "\u{1F4E1}": "takes its picture from the network",
+    "\u{1F3AF}": "aims moving heads",
+    "\u{1F47E}": "pixel art: games and sprites",
+    "\u{1F9EC}": "a simulation: cells evolving off their own last frame",
+    "\u{1F4F9}": "motion-tracking aware",
+    // the power functions, shown together at the end of a row
+    "\u{1F58C}\uFE0F": "power function: a shader, every pixel computed from its position",
+    "\u2728": "power function: particles, born, moved by forces, and dying",
+    "\u{1F30A}": "power function: a fluid working out its own motion",
+    "\u{1F4A8}": "power function: transport, light carried and fading rather than redrawn",
+    "\u{1F32B}\uFE0F": "power function: a noise field, the cloud and smoke family",
+    "\u{1F3A1}": "power function: polar, composed around a center",
+};
+
 function emojiTagsFor(t) {
     const out = [];
+    const kernels = [];
     const seen = new Set();
-    const push = (ch) => { if (ch && !seen.has(ch)) { seen.add(ch); out.push(ch); } };
+    const push = (ch) => {
+        if (!ch || seen.has(ch)) return;
+        seen.add(ch);
+        (KERNEL_EMOJI.includes(ch) ? kernels : out).push(ch);
+    };
     push(ROLE_EMOJI[t.role]);
     push(DIM_EMOJI[t.dim]);
     for (const ch of graphemes(t.tags || "")) push(ch);
-    return out;
+    // Kernel chips in a fixed order, so two effects on the same kernels show the same run.
+    kernels.sort((a, b) => KERNEL_EMOJI.indexOf(a) - KERNEL_EMOJI.indexOf(b));
+    return out.concat(kernels);
 }
 
 // The type picker serves two modes:
@@ -5421,6 +5496,8 @@ function openPicker(anchorEl, opts) {
         Object.values(ROLE_EMOJI),                       // type
         Object.values(DIM_EMOJI),                        // dimension
         ["\u{1F4AB}", "\u{1F319}", "\u{1F419}", "\u26A1\uFE0F"],   // origin
+        AUDIO_EMOJI,                                     // what it listens to
+        KERNEL_EMOJI,                                    // which power functions it is built on
     ];
     const groups = CHIP_GROUPS.map(g => present.filter(e => g.includes(e)));
     const classified = new Set(CHIP_GROUPS.flat());
@@ -5442,6 +5519,8 @@ function openPicker(anchorEl, opts) {
             const chip = document.createElement("button");
             chip.className = "type-picker-chip";
             chip.textContent = emoji;
+            const label = EMOJI_LABEL[emoji];
+            if (label) { chip.title = label; chip.setAttribute("aria-label", label); }
             chip.addEventListener("click", () => {
                 if (activeChips.has(emoji)) { activeChips.delete(emoji); chip.classList.remove("active"); }
                 else { activeChips.add(emoji); chip.classList.add("active"); }
@@ -5522,7 +5601,7 @@ function openPicker(anchorEl, opts) {
             }
             const emoji = document.createElement("span");
             emoji.className = "type-picker-item-emoji";
-            emoji.textContent = emojiTagsFor(t).join("");
+            renderEmojiTags(emoji, emojiTagsFor(t));
             item.appendChild(emoji);
             // Show the factory-stripped name ("Rainbow") not the typeName
             // ("RainbowEffect"); the role text on the right already conveys

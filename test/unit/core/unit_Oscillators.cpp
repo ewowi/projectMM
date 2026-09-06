@@ -20,9 +20,9 @@ namespace {
 /// first-tick guard), and calling this again from 0 would establish it a second time.
 template <uint8_t N>
 uint32_t run(OscillatorBank<N>& bank, uint32_t untilMs, uint32_t dtMs, uint32_t from = 0) {
-    if (from == 0) bank.advance(0);
+    if (from == 0) bank.advanceTo(0);
     uint32_t t = from;
-    while (t + dtMs <= untilMs) { t += dtMs; bank.advance(t); }
+    while (t + dtMs <= untilMs) { t += dtMs; bank.advanceTo(t); }
     return t;
 }
 
@@ -34,7 +34,7 @@ TEST_CASE("an oscillator stays inside the range the effect asked for") {
     int32_t lo = 1 << 30, hi = -(1 << 30);
     uint32_t t = 0;
     for (uint32_t f = 0; f < 2000; f++) {
-        bank.advance(t);
+        bank.advanceTo(t);
         t += 7;                                    // an irregular frame time, as a real loop has
         lo = bank.value(0) < lo ? bank.value(0) : lo;
         hi = bank.value(0) > hi ? bank.value(0) : hi;
@@ -64,7 +64,7 @@ TEST_CASE("two oscillators at the same rate hold their phase relationship indefi
     run(bank, 1600, 16);
     const int32_t earlyGap = static_cast<int32_t>(bank.phase(1)) - static_cast<int32_t>(bank.phase(0));
     uint32_t t = 1600;
-    for (uint32_t f = 0; f < 200000; f++) { t += 16; bank.advance(t); }   // ~an hour of frames
+    for (uint32_t f = 0; f < 200000; f++) { t += 16; bank.advanceTo(t); }   // ~an hour of frames
     const int32_t lateGap = static_cast<int32_t>(bank.phase(1)) - static_cast<int32_t>(bank.phase(0));
     CHECK(earlyGap == lateGap);
 }
@@ -82,14 +82,14 @@ TEST_CASE("changing the rate continues from where the phase stands, without jump
     OscillatorBank<1> bank;
     bank.set(0, {.rate = 30, .low = 0, .high = 65535, .phaseOffset = 0, .wave = Wave::Saw});
     uint32_t t = 0;
-    for (uint32_t f = 0; f < 50; f++) { bank.advance(t); t += 16; }
+    for (uint32_t f = 0; f < 50; f++) { bank.advanceTo(t); t += 16; }
     const uint16_t before = bank.unitValue(0);
     CHECK(before > 0);                               // it is genuinely mid-cycle, not at the start
 
     Oscillator faster = bank.get(0);
     faster.rate = 240;
     bank.set(0, faster);
-    bank.advance(t);                                 // the very next frame, one 16 ms step
+    bank.advanceTo(t);                                 // the very next frame, one 16 ms step
     const uint16_t after = bank.unitValue(0);
 
     // One frame at the new rate moves the phase by a frame's worth, not to a new place entirely.
@@ -130,7 +130,7 @@ TEST_CASE("a square wave is only ever fully on or fully off") {
     uint32_t t = 0;
     bool sawLow = false, sawHigh = false;
     for (uint32_t f = 0; f < 300; f++) {
-        bank.advance(t);
+        bank.advanceTo(t);
         t += 11;                                     // 3.3 s, about five cycles at 90 BPM
         const int32_t v = bank.value(0);
         CHECK((v == 0 || v == 255));                 // never anything in between
@@ -155,9 +155,9 @@ TEST_CASE("the first frame establishes the time base instead of jumping the phas
     // An effect enabled after the device has been up for an hour starts at zero, not an hour in.
     OscillatorBank<1> bank;
     bank.set(0, {.rate = 60, .low = 0, .high = 65535, .phaseOffset = 0, .wave = Wave::Saw});
-    bank.advance(3600000u);                          // first call, an hour on the clock
+    bank.advanceTo(3600000u);                          // first call, an hour on the clock
     CHECK(bank.phase(0) == 0);
-    bank.advance(3600016u);
+    bank.advanceTo(3600016u);
     // One 16 ms frame in, not an hour: at 60 BPM that is 16/1000 of a turn, about 1048.
     CHECK(bank.phase(0) > 1000);
     CHECK(bank.phase(0) < 1100);

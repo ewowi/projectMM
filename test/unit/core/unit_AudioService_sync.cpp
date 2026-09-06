@@ -182,6 +182,21 @@ TEST_CASE("AudioService Receive: a localhost WLED packet drives frame_, then hol
     }
     CHECK(landed);
     CHECK(a.audioFrame()->levelSmoothed == 111);
+    // The ballistic is OURS, not the packet's: the smoothed bands rise toward the received raw
+    // bands, and they survive the whole-frame copy the next packet makes (a copy that zeroed them
+    // forty times a second would leave nothing to fall slowly).
+    CHECK(a.audioFrame()->bandsSmoothed[15] > 80);   // peer.bands[15] is 120; one block of rise
+    AudioFrame quiet;                                  // then the peer goes silent
+    buildWledAudioSync(pkt, quiet, /*peak=*/false);
+    REQUIRE(tx.sendTo(pkt, WLED_SYNC_PACKET_SIZE));
+    bool fell = false;
+    for (int i = 0; i < 100 && !fell; i++) {
+        a.tick();
+        fell = a.audioFrame()->level == 0;
+        if (!fell) platform::delayMs(1);
+    }
+    CHECK(fell);
+    CHECK(a.audioFrame()->bandsSmoothed[15] > 40);   // still falling, not reset by the copy
     // Named, not just "receiving": the packet came from loopback, so the status has to say so. A
     // receiver that cannot name its source looks identical to one locked onto the wrong device.
     CHECK(std::strcmp(status(a), "receiving from 127.0.0.1") == 0);

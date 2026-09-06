@@ -44,7 +44,7 @@ public:
         const uint32_t now = elapsed();
         // Shared accumulator: raw dt·rate in 64 bits, divided only at the read, so a sub-millisecond
         // frame does not round to zero and freeze the animation (mm::BeatPhase owns that rule now).
-        phase_.advance(now, bpm);
+        phase_.advanceTo(now, bpm);
         // Accumulate dt*bpm and read the high bits as the scroll phase (uint8 angle) —
         // the same integer accumulator the other effects use so a sub-ms dt isn't lost.
         const uint8_t t = static_cast<uint8_t>(phase_.phase(256));

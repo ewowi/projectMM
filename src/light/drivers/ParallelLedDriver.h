@@ -195,7 +195,7 @@ public:
     /// **ON is simply the better configuration — the switch exists to A/B it, not because some setups
     /// should run it OFF.** The one-frame output latency it adds (~8–20 ms) sits inside the perceptual
     /// audio↔visual sync window and is small next to what the pipeline already spends (FFT window +
-    /// render + the 8–16 ms WS2812 wire itself), so there is no user class — sound-reactive included —
+    /// render + the 8–16 ms WS2812 wire itself), so there is no user class (audio-reactive included)
     /// that should turn it off for latency. Leave it ON and take the fps.
     ///
     /// **It is per-driver because the resource is per-driver:** each driver's second DMA buffer lives
@@ -547,7 +547,7 @@ public:
     /// DOUBLE-BUFFER (doubleBuffer ON — encode N+1 while N clocks out, `max(encode, wire)` per tick,
     /// +1 frame latency, +1 DMA buffer). Inert off this chip and idle until inited with a source
     /// buffer + correction. (The double-buffer defaults ON — it overlaps the blocking wire wait and
-    /// lifted the P4 whole-board rate 48→76 fps; OFF is the sound-reactive 0-latency opt-out and pays
+    /// lifted the P4 whole-board rate 48→76 fps; OFF is the audio-reactive 0-latency opt-out and pays
     /// for exactly one buffer — see the doubleBuffer control + docs/history/lessons.md.)
     // REPORTED AS BLOCKING, deliberately: tickSync()/tickRing() reach busWaitIfBusy(), which
     // waits for the DMA transfer to finish (bounded by waitBudgetMs, and self-limiting via
@@ -712,6 +712,15 @@ public:
     /// toward, and it tracks an overclocked slot rate directly. "—" until the first transfer completes.
     void tick1s() MM_NONBLOCKING override {
         if (!peripheral_) return;
+        // A bus that lost a shared peripheral to another module comes back on its own once that
+        // module lets go. On the classic ESP32 the i80 bus and a PDM microphone both need I2S0, so
+        // whichever asks second is refused; without this the loser stayed dark until the user
+        // happened to edit a control, which is a reboot-to-apply in all but name (architecture.md,
+        // live reconfiguration). Gated tightly, because this runs on the render thread: only while
+        // the driver WANTS the bus and does not hold it, and only when the backend says the thing
+        // it was refused is free again (a register read, not an init). The rebuild itself is the
+        // same reinit() a control edit runs, on the same cold path, at most once per second.
+        if (!inited_ && laneCount_ > 0 && peripheral_->busContentionCleared()) reinit();
         const uint32_t us = peripheral_->busLastTransmitUs();
         if (us == 0) std::snprintf(frameTimeStr_, sizeof(frameTimeStr_), "—");
         else std::snprintf(frameTimeStr_, sizeof(frameTimeStr_), "%u µs (%u fps max)",
@@ -1904,9 +1913,13 @@ protected:
             for (uint8_t i = 0; i < width && i < kMaxLanes; i++) {
                 const uint16_t pin = bus[i];
                 if (pin > 48) continue;                       // unset/NC: nothing routed
-                if (!platform::gpioCapability(static_cast<uint8_t>(pin)).reserved) continue;
+                const auto cap = platform::gpioCapability(static_cast<uint8_t>(pin));
+                if (cap.validGpio && !cap.reserved) continue;
+                // A pin the package lacks fails the same silent way a flash pin does (the
+                // ESP32-PICO-V3-02 has no GPIO 18/23), so it is refused here for the same reason.
                 std::snprintf(statusBuf_, sizeof(statusBuf_),
-                              "GPIO %u is wired to flash/PSRAM on this chip - pick another pin",
+                              cap.validGpio ? "GPIO %u is wired to flash/PSRAM on this chip - pick another pin"
+                                            : "GPIO %u does not exist on this chip package - pick another pin",
                               unsigned(pin));
                 setStatus(statusBuf_, Severity::Error);
                 deinit();

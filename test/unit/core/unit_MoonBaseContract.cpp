@@ -81,3 +81,40 @@ TEST_CASE("NetworkModule.json keeps MoonBase's scraped keys inside its 2048-byte
     std::filesystem::remove_all(tmpRoot);
     mm::platform::fsSetRoot(".");
 }
+
+// The OTA routes are the OTHER cross-image contract, and the one with two speakers: the browser
+// drives an update by talking to the application, which hands over to MoonBase mid-flight, so the
+// page keeps calling the same paths against a different image. The two therefore have to agree on
+// the names, and nothing else pins that: MoonBase is a standalone project sharing no sources, so a
+// route renamed on one side compiles cleanly on both and fails only on a device, halfway through
+// an update, with the app already gone.
+//
+// They diverged once (MoonBase served `/install` and `/install-url` while the app served
+// `/api/firmware/upload` and `/api/firmware/url`), which cost a debugging round: the app answers an
+// unknown large POST with 413, so pushing to the wrong name reads as "the image is too big" rather
+// than "no such route". This test reads both sources and requires the shared vocabulary.
+TEST_CASE("the two boot images serve the OTA routes under the same names") {
+    // Resolved from this file rather than the working directory: ctest runs the binary from the
+    // build tree, where a relative path finds nothing.
+    const std::filesystem::path repo =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    const auto read = [&](const char* rel) {
+        std::ifstream f(repo / rel);
+        REQUIRE_MESSAGE(f.good(), "cannot open " << rel);
+        return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    };
+    const std::string moonbase = read("moonbase/main/moonbase_main.cpp");
+    const std::string app      = read("src/core/HttpServerModule.cpp");
+
+    // Push an image, and install from a URL: the two routes a browser calls across the handover.
+    for (const char* route : {"/api/firmware/upload", "/api/firmware/url"}) {
+        CHECK_MESSAGE(moonbase.find(route) != std::string::npos, "MoonBase must serve " << route);
+        CHECK_MESSAGE(app.find(route) != std::string::npos, "the app must serve " << route);
+    }
+
+    // And the old names stay gone on both sides: a leftover would be a second way to say one
+    // thing, which is what this test exists to prevent.
+    for (const char* gone : {"\"POST /install\"", "\"POST /install-url\"", "'/install'", "'/install-url'"}) {
+        CHECK_MESSAGE(moonbase.find(gone) == std::string::npos, "MoonBase still references " << gone);
+    }
+}

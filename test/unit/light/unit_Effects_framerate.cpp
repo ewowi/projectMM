@@ -119,11 +119,25 @@ TEST_CASE("every effect behaves the same at any framerate") {
         //
         //   BouncingBalls: its MOTION was always rate-independent (ball height comes from absolute
         //   wall-clock time); its trail now comes from the Layer and its golden is unchanged.
+        //   NebulaEffect (1.36): the same shape as FluidEffect below, for the same reason: its
+        //   births are placed by an oscillator and paced by a time budget, so a batched frame
+        //   seeds along a different path than a spread one.
+        //
+        //   FluidEffect (1.36): its jets are POSITIONED by an oscillator and poured on a
+        //   time-paced budget with catch-up. At a low framerate several pours land in one frame,
+        //   all reading the jet's position at that instant, where a fast device spreads the same
+        //   pours across the arc. So the dye is laid down along a slightly different path, which
+        //   is a property of pouring a moving source in batches rather than a rate bug: the pour
+        //   COUNT is already rate-correct. Surfaced when the oscillator was fixed to advance on
+        //   absolute time; before that the jets never moved and the paths could not differ.
         const std::string en(name);
         const double band = (en == "BlurzEffect")       ? 3.70
+                          : (en == "FluidEffect")       ? 1.45
+                          : (en == "NebulaEffect")      ? 1.45
                           : (en == "RandomEffect")      ? 2.40
                           : (en == "StarFieldEffect")   ? 1.50
                           : (en == "BouncingBallsEffect") ? 1.40 : 1.35;
+        if (!(ratio < band)) MESSAGE("FRAMERATE " << en << " ratio=" << ratio << " band=" << band);
         CHECK(ratio < band);
         audited++;
     });

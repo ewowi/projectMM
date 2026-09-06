@@ -183,11 +183,22 @@ The rest the module declares about itself:
 | 🦅 | a named contributor, credited on the module |
 | 🎵 volume · 🎶 frequency | it listens: one note reacts to how LOUD the room is, two to WHICH notes are playing |
 | 📡 | it takes its picture from the network |
-| ✨ | built from particles: sparks that are born, fall and die |
 | 🎯 | it aims moving heads |
-| 🖌️ | a shader: every pixel computed from its own position, the way a screen shader works |
 | 👾 | pixel art: the games and sprites |
 | 🧬 | a simulation: the picture emerges from cells evolving off their own last frame, rather than being drawn |
+
+And a last group, shown together at the end of the row, saying which **power functions** the effect
+is built on. These are the kernels of [the shared library](../moonmodules/light/power-functions.md),
+so they group effects by what they are made of, and by what that makes them look like:
+
+| | |
+|---|---|
+| 🖌️ | a shader: every pixel computed from its own position, the way a screen shader works |
+| ✨ | particles: sparks that are born, move under forces and die |
+| 🌊 | a fluid: a medium that works out its own motion, so a vortex forms and travels because the equations say so |
+| 💨 | transport: light is CARRIED and fades rather than redrawn, so the effect has a memory of where it has been |
+| 🌫️ | a noise field: texture sampled from a field rather than drawn, the cloud and smoke family |
+| 🎡 | polar: composed around a center rather than across a grid, which is what suits a round fixture |
 | 📹 | motion-tracking aware: it follows people or objects moving in the room *(reserved, nothing carries it yet)* |
 
 A module can carry several: `💫🎶` is a MoonLight effect that reacts to frequency.

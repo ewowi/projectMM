@@ -394,7 +394,7 @@ const char kPage[] =
     // size and matches how the application's own upload route works.
     "async function up(){const f=document.getElementById('f').files[0];if(!f)return;"
     "S('installing '+(f.size/1024|0)+' KB...');"
-    "const r=await fetch('/install',{method:'POST',body:f});"
+    "const r=await fetch('/api/firmware/upload',{method:'POST',body:f});"
     "S(await r.text());}"
     // The install runs on its own task (202); W() watches its status until the app answers
     // (404 on /moonbase means the new firmware is up, at this same address).
@@ -403,14 +403,14 @@ const char kPage[] =
     "setTimeout(()=>location.reload(),3000);}else{S(await p.text());}}"
     "catch(_){S('restarting...');}},2000);}"
     "async function url(){const u=document.getElementById('u').value;if(!u)return;"
-    "const r=await fetch('/install-url',{method:'POST',body:u});S(await r.text());if(r.ok)W();}"
+    "const r=await fetch('/api/firmware/url',{method:'POST',body:u});S(await r.text());if(r.ok)W();}"
     // Prefill the URL field with the last install source (RAM-held), so Install doubles as
     // retry: the escape after a cancel or failure wiped the app slot.
-    "fetch('/last-url').then(r=>r.text()).then(u=>{if(u)document.getElementById('u').value=u;})"
+    "fetch('/api/firmware/last-url').then(r=>r.text()).then(u=>{if(u)document.getElementById('u').value=u;})"
     ".catch(()=>{});"
-    "async function ba(){const r=await fetch('/boot-app',{method:'POST'});S(await r.text());"
+    "async function ba(){const r=await fetch('/api/firmware/boot-app',{method:'POST'});S(await r.text());"
     "if(r.ok)setTimeout(()=>location.reload(),8000);}"
-    "async function cx(){S(await (await fetch('/cancel',{method:'POST'})).text());}"
+    "async function cx(){S(await (await fetch('/api/firmware/cancel',{method:'POST'})).text());}"
     "</script>";
 
 // The application slot. From the factory partition esp_ota_get_next_update_partition returns the
@@ -656,9 +656,9 @@ void serveOne(int sock) {
     }
 
     bool installed = false;
-    if (std::strncmp(head, "POST /install-url", 17) == 0 && installing_) {
+    if (std::strncmp(head, "POST /api/firmware/url", 22) == 0 && installing_) {
         sendResponse(sock, "409 Conflict", "text/plain", "error: an install is already running");
-    } else if (std::strncmp(head, "POST /install-url", 17) == 0) {
+    } else if (std::strncmp(head, "POST /api/firmware/url", 22) == 0) {
         // The body is the URL itself; small enough to finish reading into the same buffer.
         while (prefixLen < contentLen && headLen + prefixLen < sizeof(head) - 1) {
             const int n = ::recv(sock, head + headLen + prefixLen,
@@ -688,7 +688,7 @@ void serveOne(int sock) {
                 sendResponse(sock, "202 Accepted", "text/plain", status_);
             }
         }
-    } else if (std::strncmp(head, "POST /install", 13) == 0) {
+    } else if (std::strncmp(head, "POST /api/firmware/upload", 25) == 0) {
         if (installing_) {
             sendResponse(sock, "409 Conflict", "text/plain", "error: an install is already running");
         } else {
@@ -697,10 +697,10 @@ void serveOne(int sock) {
             installing_ = false;
             sendResponse(sock, installed ? "200 OK" : "500 Internal Server Error", "text/plain", status_);
         }
-    } else if (std::strncmp(head, "POST /boot-app", 14) == 0 && installing_) {
+    } else if (std::strncmp(head, "POST /api/firmware/boot-app", 27) == 0 && installing_) {
         // Booting away mid-write would abandon a half-written slot; refuse, visibly.
         sendResponse(sock, "409 Conflict", "text/plain", "error: an install is already running");
-    } else if (std::strncmp(head, "POST /boot-app", 14) == 0) {
+    } else if (std::strncmp(head, "POST /api/firmware/boot-app", 27) == 0) {
         // Switch back to the installed application without installing anything.
         // esp_ota_set_boot_partition validates the image first, so a half-written app is
         // refused and the device stays here: only a bootable app can be booted.
@@ -712,12 +712,12 @@ void serveOne(int sock) {
         installed = ok;   // reuse the reply-then-restart tail below
     } else if (std::strncmp(head, "GET /logo.png", 13) == 0) {
         sendBinary(sock, "image/png", logoStart, static_cast<size_t>(logoEnd - logoStart));
-    } else if (std::strncmp(head, "GET /last-url", 13) == 0) {
+    } else if (std::strncmp(head, "GET /api/firmware/last-url", 26) == 0) {
         // The most recent install source, RAM-held: the page prefills its URL field with it,
         // so Install doubles as retry, the escape after a cancel wiped the app slot. Empty
         // after a power cycle.
         sendResponse(sock, "200 OK", "text/plain", stagedUrlTask_);
-    } else if (std::strncmp(head, "POST /cancel", 12) == 0) {
+    } else if (std::strncmp(head, "POST /api/firmware/cancel", 25) == 0) {
         // Cancel a running URL install: its loop polls the flag and aborts back to this page.
         // (An upload cancels by dropping the connection; this server is busy receiving it.)
         // Nothing to cancel is not an error worth a scary status, just say so.

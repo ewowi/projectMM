@@ -26,11 +26,129 @@
 #include "esp_heap_caps.h"   // capture buffer alloc for the shared frame loopback
 #include "esp_timer.h"       // timed first transmit
 #include "esp_log.h"
+#include "esp_cpu.h"
+#if CONFIG_IDF_TARGET_ESP32
+// The level-5 refill path (rmt_hi_vector.S): the classic ESP32 has no RMT DMA, so the refill
+// interrupt is the whole timing story. These are the pieces that path drives directly.
+#include "esp_rom_sys.h"          // esp_rom_route_intr_matrix
+#include "esp_memory_utils.h"     // esp_ptr_internal: the ISR may only read internal RAM
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"        // vTaskDelay in the polled wait
+#include "hal/rmt_ll.h"
+#include "soc/rmt_struct.h"       // RMT
+#include "soc/gpio_struct.h"      // GPIO.func_out_sel_cfg: which channel a pin got
+#include "soc/gpio_sig_map.h"     // RMT_SIG_OUT0_IDX
+#include "soc/interrupts.h"       // ETS_RMT_INTR_SOURCE
+#include "soc/dport_reg.h"        // the interrupt matrix map registers, read back after routing
+#endif
 
 #include <cstdlib>
 #include <cstring>
 #include <functional>  // the transmit callback the shared frame loopback takes
 #include <new>      // std::nothrow
+
+#if CONFIG_IDF_TARGET_ESP32
+// ---------------------------------------------------------------------------------------------
+// Level-5 refill. The IDF driver keeps everything about the channel (GPIO, clock, memory blocks,
+// power) and is bypassed for the transmit itself: its interrupt runs at level 1-3, which every
+// critical section masks, and that is what let a refill arrive late (see rmt_hi_vector.S). The
+// RMT interrupt source on core 1 is rerouted to vector 26 (level 5, refused by esp_intr_alloc as
+// "special", so routed by hand), and this code plays each frame ping-pong out of the channel's
+// memory, one half-block per threshold interrupt, straight from the driver's symbol buffer.
+//
+// At file scope, outside every namespace: the assembly bridge calls rmtHiIsr by its C name, and
+// RMTMEM is the linker's symbol, so both need external C linkage, which an anonymous namespace
+// would silently take away.
+//
+// Everything the ISR touches lives in internal RAM: the channel state (DRAM), the symbol buffer
+// (the driver allocates it internal-first and the transmit refuses anything else), RMT registers
+// and RMTMEM (peripheral). So it also runs through a flash-cache-off window, which a flash write
+// opens on both cores.
+// ---------------------------------------------------------------------------------------------
+struct RmtHiChannel {
+    const uint32_t* cur = nullptr;   // next symbol to copy in
+    const uint32_t* end = nullptr;   // one past the last
+    uint16_t half = 0;               // symbols per half-block (the threshold)
+    uint16_t offset = 0;             // where the next half goes: 0 or `half`
+    volatile bool busy = false;      // a frame is on the wire
+};
+static RmtHiChannel s_hi[RMT_LL_CHANS_PER_INST];
+
+// RMTMEM is a linker-provided address; the IDF types it in a private header, so the same layout
+// is declared here: 8 channels of 64 words, contiguous, which is what lets a channel that owns
+// several blocks be addressed as one run past its own 64.
+struct RmtHiMem { struct { volatile uint32_t data32[SOC_RMT_MEM_WORDS_PER_CHANNEL]; } chan[RMT_LL_CHANS_PER_INST]; };
+extern "C" RmtHiMem RMTMEM;
+extern "C" void ld_include_rmt_hi_vector();   // forces the .S object to link (the vector symbol is weak elsewhere)
+
+// Copy the next half-block for `ch`. Runs at level 5: no RTOS, no logging, no cache-dependent
+// memory. A frame shorter than the remaining half ends with a zero symbol, which the peripheral
+// treats as end-of-transmission and raises TX_DONE on.
+static void IRAM_ATTR rmtHiFill(uint8_t ch) {
+    RmtHiChannel& c = s_hi[ch];
+    volatile uint32_t* dst = &RMTMEM.chan[ch].data32[c.offset];
+    uint32_t n = c.half;
+    while (n && c.cur != c.end) { *dst++ = *c.cur++; n--; }
+    if (n) *dst = 0;                                   // end marker inside this half
+    c.offset = static_cast<uint16_t>(c.offset ? 0 : c.half);
+}
+
+// The C half of the level-5 handler. Called from rmt_hi_vector.S with the register file saved
+// and a private stack; must return promptly and must clear what it handles, the interrupt is
+// level-triggered.
+extern "C" void IRAM_ATTR rmtHiIsr(void*) {
+    const uint32_t st = RMT.int_st.val;
+    for (uint8_t ch = 0; ch < RMT_LL_CHANS_PER_INST; ch++) {
+        const uint32_t thres = RMT_LL_EVENT_TX_THRES(ch), done = RMT_LL_EVENT_TX_DONE(ch);
+        if (st & thres) {
+            rmt_ll_clear_interrupt_status(&RMT, thres);
+            if (s_hi[ch].busy) rmtHiFill(ch);
+        }
+        if (st & done) {
+            rmt_ll_clear_interrupt_status(&RMT, done);
+            s_hi[ch].busy = false;
+            rmt_ll_enable_interrupt(&RMT, thres | done, false);
+        }
+    }
+}
+
+// Which peripheral channel the IDF handed this GPIO: the matrix records the output signal, and
+// the RMT signals are consecutive from RMT_SIG_OUT0_IDX. The driver keeps the id private.
+static uint8_t rmtHiChannelOf(uint8_t gpio) {
+    const uint32_t sig = GPIO.func_out_sel_cfg[gpio].func_sel;
+    return (sig >= RMT_SIG_OUT0_IDX && sig < RMT_SIG_OUT0_IDX + RMT_LL_CHANS_PER_INST)
+           ? static_cast<uint8_t>(sig - RMT_SIG_OUT0_IDX) : 0xFF;
+}
+
+// Route the RMT interrupt source on THIS core to vector 26 and enable it. Runs on core 1 (inside
+// the init hop) because INTENABLE is per core. After this the IDF driver's own level-1 handler
+// on this core never fires again, which is intended: nothing here calls rmt_transmit any more,
+// so nothing waits on it.
+//
+// Called after EVERY channel creation, not once: rmt_new_tx_channel routes the source back to the
+// driver's own vector each time (intr_alloc.c), and a config change re-creates the channel. A
+// once-only guard here let the second init hand the threshold events to the driver's handler,
+// which has no transaction and dereferences null: a boot loop ~10 s in, when the network coming
+// up triggered the second prepare sweep. Bench-found on the second Dig-Next-2.
+static void rmtHiRouteOnThisCore() {
+#if defined(CONFIG_ESP_SYSTEM_CHECK_INT_LEVEL_5) || defined(CONFIG_BTDM_CTRL_HLI)
+#error "level 5 is taken on this config (system check or Bluetooth HLI); the RMT refill needs it free"
+#endif
+    (void)&ld_include_rmt_hi_vector;
+    constexpr uint32_t kVector = 26;   // level 5, "special" in the descriptor table, free here
+    esp_rom_route_intr_matrix(esp_cpu_get_core_id(), ETS_RMT_INTR_SOURCE, kVector);
+    esp_cpu_intr_enable(1u << kVector);
+    // Read the routing back: the matrix map for this core's RMT source, and this core's
+    // INTENABLE. The IDF's esp_intr_enable re-programs the map (intr_alloc.c), so a later call on
+    // the driver's own handle would silently undo this; the readback is what proves it held.
+    const uint32_t mapReg = esp_cpu_get_core_id() == 0
+        ? DPORT_PRO_RMT_INTR_MAP_REG : DPORT_APP_RMT_INTR_MAP_REG;
+    ESP_LOGI("rmt", "level-5 refill: RMT source routed to vector %lu on core %d; map reads %lu, INTENABLE 0x%08lx",
+             static_cast<unsigned long>(kVector), static_cast<int>(esp_cpu_get_core_id()),
+             static_cast<unsigned long>(DPORT_REG_READ(mapReg)),
+             static_cast<unsigned long>(esp_cpu_intr_get_enabled_mask()));
+}
+#endif  // CONFIG_IDF_TARGET_ESP32
 
 namespace mm::platform {
 
@@ -43,45 +161,106 @@ struct RmtTxState {
     rmt_channel_handle_t channel = nullptr;
     rmt_encoder_handle_t encoder = nullptr;
     uint32_t resolutionHz = 0;
+#if CONFIG_IDF_TARGET_ESP32
+    uint8_t  channelId = 0xFF;    // the peripheral channel the IDF gave us, read back from the GPIO matrix
+    uint16_t blockSymbols = 0;    // symbols the channel's memory holds (64 per block)
+#endif
 };
 
+
 } // namespace
+
+// The channel is created on CORE 1, and that is the whole point of the detour below.
+//
+// An RMT TX channel's refill interrupt is bound to whichever core calls rmt_new_tx_channel
+// (esp_intr_alloc pins to the calling core; esp_intr_alloc_info_t has no core field). Init is
+// reached from the prepare sweep on the main task, and CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0 puts
+// that on core 0, where the WiFi task is also pinned. So the driver TICKED on core 1 while its
+// interrupt lived with WiFi on core 0, and every WiFi burst that ran above the RMT's level-3
+// ceiling delayed a refill past the 64-symbol deadline: a DMA-less chip keeps clocking the
+// stale block and the strip shows a few wrong lights, at any light count, at any TX power.
+// Bench (QuinLED Dig-Next-2, 256 WS2812): more memory blocks softened it, priority 3 did
+// nothing (WiFi's ISR is above 3 on the same core), halving the lights changed nothing.
+// Espressif's RMT maintainer names this exact fix on esp-idf#5173: create the channel on the
+// core WiFi is not on. Core 1 here carries only the encode task, so the refill runs undisturbed.
+//
+// A pinned one-shot task, not esp_ipc_call_blocking: the IPC task has a 1 KB stack and channel
+// creation allocates and installs an interrupt. Deinit needs no counterpart: esp_intr_free hops
+// to the allocating core itself (intr_alloc.c, via IPC). Chips with RMT DMA gain nothing from
+// the hop but lose nothing either, so it is unconditional.
+namespace {
+struct RmtInitJob {
+    RmtTxState* st;
+    uint8_t gpio;
+    uint32_t resolutionHz;
+    bool invert;
+    bool ok;
+};
+
+void rmtInitOnThisCore(void* arg) {
+    auto* job = static_cast<RmtInitJob*>(arg);
+    RmtTxState* st = job->st;
+    rmt_tx_channel_config_t txCfg = {};
+    txCfg.gpio_num = static_cast<gpio_num_t>(job->gpio);
+    txCfg.clk_src = RMT_CLK_SRC_DEFAULT;
+    txCfg.resolution_hz = job->resolutionHz;
+    txCfg.trans_queue_depth = 4;
+    txCfg.flags.invert_out = job->invert ? 1 : 0;
+    // One memory block per channel, the chip's own size (64 words classic, 48 on the S3: a
+    // hardcoded 64 makes rmt_new_tx_channel reject the S3), so all eight RMT channels stay
+    // available to an eight-pin board. On the classic ESP32 the block is the refill deadline
+    // (~40 us per half-block), and with the refill at interrupt level 1 that deadline was missed
+    // under WiFi: four blocks softened it, eight made it worse. With the refill at level 5
+    // (below) one block is flicker-free, bench-verified on two Dig-Next-2 boards, so the extra
+    // blocks bought nothing but lost pins.
+    txCfg.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
+    if (rmt_new_tx_channel(&txCfg, &st->channel) != ESP_OK) { job->ok = false; return; }
+
+    rmt_copy_encoder_config_t copyCfg = {};
+    if (rmt_new_copy_encoder(&copyCfg, &st->encoder) != ESP_OK) {
+        rmt_del_channel(st->channel); st->channel = nullptr;
+        job->ok = false; return;
+    }
+    if (rmt_enable(st->channel) != ESP_OK) {
+        rmt_del_encoder(st->encoder); st->encoder = nullptr;
+        rmt_del_channel(st->channel); st->channel = nullptr;
+        job->ok = false; return;
+    }
+    ESP_LOGI("rmt", "channel on GPIO %u created on core %d (%lu-symbol block)",
+             static_cast<unsigned>(job->gpio), static_cast<int>(esp_cpu_get_core_id()),
+             static_cast<unsigned long>(txCfg.mem_block_symbols));
+#if CONFIG_IDF_TARGET_ESP32
+    st->channelId = rmtHiChannelOf(job->gpio);
+    st->blockSymbols = static_cast<uint16_t>(txCfg.mem_block_symbols);
+    if (st->channelId != 0xFF) {
+        rmt_ll_tx_enable_wrap(&RMT, st->channelId, true);      // one global bit on this chip
+        rmt_ll_tx_set_limit(&RMT, st->channelId, st->blockSymbols / 2);
+        rmtHiRouteOnThisCore();
+        ESP_LOGI("rmt", "level-5 refill on channel %u, %u-symbol halves",
+                 static_cast<unsigned>(st->channelId), static_cast<unsigned>(st->blockSymbols / 2));
+    } else {
+        ESP_LOGW("rmt", "could not read the channel back from the GPIO matrix; IDF transmit path");
+    }
+#endif
+    job->ok = true;
+}
+}  // namespace
 
 bool rmtWs2812Init(RmtWs2812Handle& h, uint8_t gpio, uint32_t resolutionHz, bool invert) {
     auto* st = new (std::nothrow) RmtTxState();
     if (!st) return false;
 
-    rmt_tx_channel_config_t txCfg = {};
-    txCfg.gpio_num = static_cast<gpio_num_t>(gpio);
-    txCfg.clk_src = RMT_CLK_SRC_DEFAULT;
-    txCfg.resolution_hz = resolutionHz;
-    // Two memory blocks of symbols ping-pong so the DMA-less channel can refill
-    // while sending — the classic anti-glitch shape. The per-channel block size
-    // is a chip fact (64 words classic, 48 on the S3 — a hardcoded 64 makes
-    // rmt_new_tx_channel reject S3); the copy encoder streams from our buffer
-    // regardless.
-    txCfg.mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL;
-    txCfg.trans_queue_depth = 4;
-    txCfg.flags.invert_out = invert ? 1 : 0;
-
-    if (rmt_new_tx_channel(&txCfg, &st->channel) != ESP_OK) {
-        delete st;
-        return false;
+    RmtInitJob job{st, gpio, resolutionHz, invert, false};
+    WorkerTask hop;
+    // Priority above the render loop so the one-shot runs at once; 8 KB matches the encode
+    // task. If the spawn fails (single core, no memory) the init runs inline on this core, which
+    // is the pre-fix behavior rather than no channel at all.
+    if (spawnPinnedTask(hop, "mmRmtInit", &rmtInitOnThisCore, &job, 8192, 6, 1)) {
+        stopPinnedTask(hop);          // joins: the fn already returned, this only reaps the task
+    } else {
+        rmtInitOnThisCore(&job);
     }
-
-    rmt_copy_encoder_config_t copyCfg = {};
-    if (rmt_new_copy_encoder(&copyCfg, &st->encoder) != ESP_OK) {
-        rmt_del_channel(st->channel);
-        delete st;
-        return false;
-    }
-
-    if (rmt_enable(st->channel) != ESP_OK) {
-        rmt_del_encoder(st->encoder);
-        rmt_del_channel(st->channel);
-        delete st;
-        return false;
-    }
+    if (!job.ok) { delete st; return false; }
 
     st->resolutionHz = resolutionHz;
     h.impl = st;
@@ -97,6 +276,27 @@ bool rmtWs2812Transmit(RmtWs2812Handle& h, const uint32_t* symbols, size_t symbo
     auto* st = static_cast<RmtTxState*>(h.impl);
     if (!st || !symbols || symbolCount == 0) return false;
 
+#if CONFIG_IDF_TARGET_ESP32
+    if (st->channelId != 0xFF) {
+        // The level-5 path. The symbol buffer must be internal RAM: the refill runs with the
+        // flash cache possibly off, and a PSRAM read there is a fault, not a stall. The driver
+        // allocates internal-first; this is the guard for the fallback case.
+        if (!esp_ptr_internal(symbols)) return false;
+        RmtHiChannel& c = s_hi[st->channelId];
+        if (c.busy) return false;
+        const uint8_t ch = st->channelId;
+        c.cur = symbols; c.end = symbols + symbolCount;
+        c.half = st->blockSymbols / 2; c.offset = 0;
+        c.busy = true;
+        rmt_ll_tx_reset_pointer(&RMT, ch);
+        rmt_ll_clear_interrupt_status(&RMT, RMT_LL_EVENT_TX_THRES(ch) | RMT_LL_EVENT_TX_DONE(ch));
+        rmtHiFill(ch);                     // both halves primed before the start
+        rmtHiFill(ch);
+        rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_TX_THRES(ch) | RMT_LL_EVENT_TX_DONE(ch), true);
+        rmt_ll_tx_start(&RMT, ch);
+        return true;
+    }
+#endif
     rmt_transmit_config_t txCfg = {};
     txCfg.loop_count = 0;   // single shot, no hardware loop
 
@@ -109,9 +309,9 @@ bool rmtWs2812Transmit(RmtWs2812Handle& h, const uint32_t* symbols, size_t symbo
                         symbolCount * sizeof(uint32_t), &txCfg) == ESP_OK;
 }
 
-void rmtWs2812Wait(RmtWs2812Handle& h, uint32_t timeoutMs) {
+bool rmtWs2812Wait(RmtWs2812Handle& h, uint32_t timeoutMs) {
     auto* st = static_cast<RmtTxState*>(h.impl);
-    if (!st) return;
+    if (!st) return true;
     // Finite timeout so a wedged DMA can't hang the render tick forever. Even the
     // longest realistic frame (thousands of pixels) clocks out well under 1 s; a
     // timeout here means the peripheral is stuck, and the driver re-encodes the
@@ -125,12 +325,34 @@ void rmtWs2812Wait(RmtWs2812Handle& h, uint32_t timeoutMs) {
     // and calls rmt_transmit again; if the channel is still busy, rmt_transmit
     // returns an error, rmtWs2812Transmit returns false, and RmtLedDriver::tick()
     // skips waiting on that channel (its started[] guard) — no crash, no corruption.
-    rmt_tx_wait_all_done(st->channel, timeoutMs);
+    // The RESULT is what the caller needs: a timeout leaves the frame in flight, and re-encoding
+    // into symbols_ next tick would rewrite bytes the peripheral is still clocking out. That is a
+    // silent corruption rather than a dropped frame, and it shows on the strip as a few lights in
+    // the wrong color, independent of light count.
+#if CONFIG_IDF_TARGET_ESP32
+    if (st->channelId != 0xFF) {
+        // TX_DONE clears `busy` from the level-5 handler. Polled with a yield, not a semaphore:
+        // the handler runs where no RTOS call is allowed, so it cannot signal one.
+        const int64_t deadline = esp_timer_get_time() + static_cast<int64_t>(timeoutMs) * 1000;
+        while (s_hi[st->channelId].busy) {
+            if (esp_timer_get_time() > deadline) return false;
+            vTaskDelay(1);
+        }
+        return true;
+    }
+#endif
+    return rmt_tx_wait_all_done(st->channel, timeoutMs) == ESP_OK;
 }
 
 void rmtWs2812Deinit(RmtWs2812Handle& h) {
     auto* st = static_cast<RmtTxState*>(h.impl);
     if (!st) return;
+#if CONFIG_IDF_TARGET_ESP32
+    if (st->channelId != 0xFF) {
+        rmt_ll_enable_interrupt(&RMT, RMT_LL_EVENT_TX_THRES(st->channelId) | RMT_LL_EVENT_TX_DONE(st->channelId), false);
+        s_hi[st->channelId].busy = false;
+    }
+#endif
     if (st->channel) {
         rmt_disable(st->channel);
         rmt_del_channel(st->channel);

@@ -265,6 +265,57 @@ The Ethernet PHY type and pin map are runtime config, not baked into the build: 
 
 `--profile` is accepted one release for migration: `--profile default` → `--firmware esp32`, `--profile eth-only` → `--firmware esp32-eth`.
 
+### Flashing a running device over the network
+
+A board already on the network is updated over HTTP, with no cable. Which route to use depends on
+whether the variant carries [MoonBase](architecture.md#moonbase-the-second-boot-image): a board
+cannot rewrite the partition it is executing from, so on a MoonBase variant the app hands over to
+MoonBase and MoonBase does the writing.
+
+**On a MoonBase variant** (`esp32`, `esp32-16mb`, `esp32s3-zero`, and any variant `build_esp32.py`
+builds MoonBase alongside), it is two requests:
+
+```sh
+# 1. the app reboots into MoonBase, with nothing staged. Back in ~4 seconds.
+curl -X POST http://<device>/api/firmware/moonbase
+
+# 2. MoonBase writes the app slot and reboots into it
+curl --http1.1 -H "Expect:" --data-binary @build/esp32-<firmware>/projectMM.bin \
+     http://<device>/api/firmware/upload
+```
+
+The second request ends with **no HTTP status** (curl reports 000): the device reboots into the new
+image as the write completes, so the socket closes before a response arrives. That is success, not
+failure. Confirm by reading the build back:
+
+```sh
+curl -s http://<device>/api/modules/Firmware   # the `build` control names the commit and date
+```
+
+MoonBase serves the same route names as the application, so a page driving an update keeps calling
+the same paths after the handover. It also installs unattended from a URL, which is what the UI's
+update button uses: `POST /api/firmware/url` with the URL as the body. `POST /api/firmware/boot-app`
+returns to the application without installing anything, and only boots an image that validates.
+
+**Without MoonBase**, the application takes the image directly on the same route,
+`POST /api/firmware/upload`. It is one of only two streaming routes (`/api/file` is the other), so
+the body may exceed the request buffer; every other route rejects an oversized body with 413.
+
+Two failure modes are worth recognizing, because both look like something else:
+
+- **413 from `/api/firmware/upload`** on a MoonBase variant means the request reached the
+  APPLICATION rather than MoonBase, and the app rejected an oversized body on a route it does not
+  stream. The device did not reboot into MoonBase, or booted back before the upload. Check with
+  `GET /moonbase`, which MoonBase answers and the app 404s.
+- **`{"error":"incomplete request body"}`** from `/api/firmware/upload` means the body did not
+  arrive within the read window. Send with `--http1.1 -H "Expect:"` so the transfer starts
+  immediately instead of waiting for a `100 Continue` the device does not send.
+
+**A partition-table change needs a cable.** OTA writes the app, never the table, so a device on an
+older layout adopts a new one only through a full serial flash (see the note under
+[Firmware variants](#firmware-variants)). On the 4 MB classic that migration also moves the
+filesystem, so the device comes back unprovisioned.
+
 ### Why not Arduino
 
 The ESP32 target uses ESP-IDF directly for three reasons:

@@ -193,7 +193,7 @@ something seems off.
 **System** — who this device is and how it's doing: its name, the device model,
 uptime, frame rate, and live memory / storage bars. You may also see an **Audio**
 module here — devices with a built-in mic come with it set up for you, and on any
-device you can add it yourself (it's how sound-reactive effects hear the music).
+device you can add it yourself (it's how audio-reactive effects hear the music).
 Audio is just the first of many: any sensor or input — from hardware or over the
 network — lives here as its own module, and we're adding more all the time.
 

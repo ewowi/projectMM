@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { applyMigrations } from "../../src/ui/migrate.js";
+import { applyMigrations, CONTROL_RENAMES } from "../../src/ui/migrate.js";
 
 test("a user preset that shares a renamed filename is the user's, not migrated", () => {
     const { files, report } = applyMigrations({ "/.config/presets/Layers.json": '{"x":1}' });
@@ -131,4 +131,50 @@ test("a corrupt config file is restored as-is and flagged for review", () => {
     const { files, report } = applyMigrations({ "/.config/Broken.json": "{not json" });
     assert.equal(files["/.config/Broken.json"], "{not json");
     assert.ok(report.some(r => r.kind === "review" && r.detail.includes("not valid JSON")));
+});
+
+// Every CONTROL_RENAMES entry is consumed as `cr.name` (renameKeys), so an entry written with any
+// other key silently renames nothing: the old key stays, the user's value never reaches the new
+// control, and no report line says so. `soundReactive` shipped with `to:` (the shape FILE_RENAMES
+// uses) and did exactly that. This checks the table's own shape as well as one worked example,
+// because the shape is the part a new entry gets wrong.
+test("every control rename declares the key renameKeys reads, and carries its scope", () => {
+    for (const [from, r] of Object.entries(CONTROL_RENAMES)) {
+        assert.ok(typeof r.name === "string" && r.name.length > 0,
+                  `${from}: needs name: (found keys ${Object.keys(r).join(", ")})`);
+        assert.ok(Array.isArray(r.onTypes) && r.onTypes.length > 0,
+                  `${from}: a bare-name rename needs onTypes, per the scoping rule`);
+    }
+});
+
+test("a saved soundReactive value comes back under audioReactive", () => {
+    const files = {
+        "/.config/Effects.json": JSON.stringify({
+            "type": "Effects",
+            "0.type": "FishTankEffect",
+            "0.soundReactive": true,
+            "0.speed": 42,
+        }),
+    };
+    const { files: out } = applyMigrations(files);
+    const cfg = JSON.parse(out["/.config/Effects.json"]);
+    assert.equal(cfg["0.audioReactive"], true, "the value must land on the new name");
+    assert.ok(!("0.soundReactive" in cfg), "the old key must be gone");
+    assert.equal(cfg["0.speed"], 42, "unrelated controls are untouched");
+});
+
+// Scoped, per the rule the table documents: the same word on a module that never declared it is
+// somebody else's control and must not be rewritten.
+test("soundReactive is left alone on a module outside its scope", () => {
+    const files = {
+        "/.config/Effects.json": JSON.stringify({
+            "type": "Effects",
+            "0.type": "NoiseEffect",
+            "0.soundReactive": true,
+        }),
+    };
+    const { files: out } = applyMigrations(files);
+    const cfg = JSON.parse(out["/.config/Effects.json"]);
+    assert.equal(cfg["0.soundReactive"], true);
+    assert.ok(!("0.audioReactive" in cfg));
 });

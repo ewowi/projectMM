@@ -179,11 +179,11 @@
     "url": "https://quinled.info/dig-next-2/",
     "supported": [
       "LEDs",
-      "WiFi"
+      "WiFi",
+      "Audio"
     ],
     "planned": [
-      "Button",
-      "Microphone"
+      "Button"
     ],
     "flashBaud": 460800,
     "modules": [
@@ -207,6 +207,16 @@
         "parent_id": "Drivers",
         "controls": {
           "pins": "2,4"
+        }
+      },
+      {
+        "type": "AudioService",
+        "id": "Audio",
+        "parent_id": "Services",
+        "controls": {
+          "micMode": 1,
+          "wsPin": 8,
+          "sdPin": 7
         }
       }
     ]

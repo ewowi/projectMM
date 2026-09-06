@@ -103,6 +103,7 @@ MODULES = [
     ("NoiseEffect",         "Layer",    {}, True),
     # The generative-fields showcases: each is Dim::D3, so the preview shows a volume.
     ("AuroraEffect",        "Layer",    {}, True),
+    ("ColorTrailsEffect",   "Layer",    {}, True),
     ("TrailsEffect",        "Layer",    {}, True),
     ("NebulaEffect",        "Layer",    {}, True),
     ("FluidEffect",         "Layer",    {}, True),

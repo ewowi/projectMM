@@ -61,6 +61,14 @@ export const TYPE_RENAMES = {
 // the bench: a blanket fps → targetFps corrupted NetworkSendDriver's own `fps`). `review` marks
 // a value-semantics change: the name maps, the value needs the user's eye.
 export const CONTROL_RENAMES = {
+    // One name for one thing: the service is AudioService, the frame is AudioFrame, so the control
+    // that makes a sprite effect follow the music is audioReactive. Scoped to the seven effects that
+    // declare it, per the rule above.
+    "soundReactive": {
+        name: "audioReactive", date: "2026-09-05",
+        onTypes: ["FishTankEffect", "FlyingToastersEffect", "PacmanEffect", "PongEffect",
+                  "SpaceInvadersEffect", "SpriteFountainEffect", "MovingHeadEffect"],
+    },
     // ControlModule's encoders spell the word out: the interface uses the industry term, the UI
     // abbreviates it to `enc` for the strip. Scoped, because `enc1` is a plausible name anywhere.
     "enc1": { name: "encoder1", date: "2026-08-30", onTypes: ["ControlModule"] },

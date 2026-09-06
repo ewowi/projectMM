@@ -25,6 +25,117 @@ Forward-looking to-build items for the **light domain** (`src/light/`: drivers, 
 MoonLight has several moving-head effects that have no equivalent here, two of them troyhack's.
 Migrate them all, on the power functions per the standing mandate rather than traced across.
 
+### RMT over DMA on the S3/P4, with a completion callback (Funkelfetisch, July 2026)
+
+Funkelfetisch's fork carries a finished branch, `codex/upstream-rmt-rgbw-performance`, that the
+classic-ESP32 flicker work of 2026-09-05 makes worth adopting: on chips with RMT DMA
+(`SOC_RMT_SUPPORT_DMA`: S3, P4) it sets `with_dma` with the IDF-recommended 1024-symbol block, so
+the frame streams from RAM and the refill interrupt that causes flicker on a DMA-less chip does not
+exist at all. It replaces the blocking `rmt_tx_wait_all_done` with `rmt_tx_register_event_callbacks`
+(`on_trans_done`) plus a per-channel busy flag so the next tick skips while a frame is in flight,
+and reports `"RMT DMA"` in the driver status so a user can see which path is live. Files:
+`platform_esp32_rmt.cpp` (+105), `RmtLedDriver.h` (+75), `LedDriverConfig.h`, `Correction.h`
+(RGBW presets, a separate topic in the same branch), with unit tests.
+
+What it does NOT address: on the classic ESP32 the DMA half compiles to nothing, and nothing in it
+moves the channel's interrupt off core 0 (the root cause found on the Dig-Next-2, fixed by
+creating the channel from core 1). The two are complementary, one driver with the right answer
+per chip: DMA where the silicon has it, the core-1 refill where it does not. Adopt his DMA and
+callback path, keep the core hop, and drop the classic-only `txInFlight_` guard where his busy
+flag covers it. Study, do not copy: write it against the seam as it stands, credit the branch.
+
+### A script's setControl rebuilds a control subtree on every write (2026-09-06)
+
+Measured on the P4 at .139: **2 fps**, with `MoonLive-2` at 251 ms and `MoonLive-3` at 245 ms per
+tick, together 498 ms of a 506 ms frame, and HTTP down to a 0.5 s round trip because it is served
+from the same loop. Both services ran `sweep.mls`, whose `tick20ms` writes four faders. Two copies
+at 50 Hz is 400 control writes a second, and `Scheduler::setControl` calls `rebuildControls()`
+unconditionally on each one:
+
+```
+clearControlsRecursive();   // wipes this module's controls AND every child's, recursively
+defineControls();           // then rebuilds them all
+```
+
+So each fader write tears down and re-creates the whole `Control` subtree. A person moving a slider
+does this a few times a second and nobody notices; a script at 50 Hz multiplies it by hundreds.
+
+Two things to fix, and they are independent. **The rebuild should be conditional**: a `live`
+control's value change cannot alter the schema, and `rebuildControls` already computes
+`schemaSignature()` before and after to decide whether to notify, so it knows. Rebuilding only when
+the shape can actually change (what `setLive` and `affectsPrepare` already distinguish) removes the
+cost for every value write, scripted or human. **And the script tick is too fast for its job**: a
+fader sweep does not need 50 Hz, so `sweep.mls` should run on a slower tick, which also caps the
+damage any future script can do through this path.
+
+Not a regression from the RMT work: it predates it and was found while measuring an unrelated slow
+board.
+
+### Speed up the fluid solver: 4 fps at 128x128, and it is not the divide (2026-09-05)
+
+Measured on an S31 (RISC-V, 320 MHz, octal PSRAM at 200 MHz), `iterations` 5, depth 1:
+
+| grid | Fluid tick | fps | cycles per cell-update |
+|---|---|---|---|
+| 32x32 | 8.5 ms | 109 | 151 |
+| 64x64 | 38 ms | 24 | 159 |
+| 128x128 | 204 ms | 4 | 205 |
+
+A cell-update is four loads, three adds, a multiply and a store: under 20 cycles of arithmetic. It
+costs **151 even at 32x32**, where the whole working set is small enough to cache, so the loop
+itself is roughly 8x more expensive than the work it does. Memory adds a further 35% by 128x128 but
+is not the wall: at 4 fps the solver moves ~25 MB/s, about 5% of what this PSRAM delivers.
+
+**A wrong turn worth recording.** The first diagnosis blamed the 64-bit divide in `relax()`, on the
+reasoning that Xtensa has no integer divide instruction. It was implemented (a power-of-two shift
+dispatched once per call, bit-exact over 8M values) and measured on the board: **no change, 326 ms
+before and after**, so it was reverted. Two errors: the S31 is RISC-V rather than Xtensa, and at
+151 cycles per update the divide was never the dominant term. A desktop measurement could not have
+caught either, since arm64 divides in hardware; only the board settles it.
+
+**Allocation placement is worth 1.6x, and nobody chose it.** Same firmware, same grid, same
+controls: **326 ms after a fresh boot, 204 ms after resizing the grid to 32 and back to 128**,
+reproducible across reboots. The solver's six buffers are ~638 KB and land in PSRAM either way, but
+where they land at boot is slower than where they land once the heap has moved. Whatever is done
+about speed, this says a boot-time allocation can be paying a large penalty invisibly, and it is
+worth understanding before optimizing the loop around it.
+
+Ordered by expected return:
+
+1. **Cut the 64-bit arithmetic in the inner loop.** Every cell computes an `int64` shift, an
+   `int64` multiply and an `int64` divide on a 32-bit core, where each is several instructions and
+   a register pair. This is the most likely source of the 151 cycles. A 32-bit formulation, or a
+   narrower intermediate with a proven bound, is the first thing to measure. Precedent: the SWAR
+   work found the 32-bit pair form bit-identical and 41% smaller.
+2. **Hoist `idx()`.** The loop addresses five neighbors per cell through `idx(x, y)`, each a
+   multiply-add. Walking row pointers instead is the standard fix and removes most of the address
+   arithmetic.
+3. **Understand the allocation-placement effect above**, since it is worth more than most loop
+   tuning and costs nothing to trigger deliberately once understood.
+4. **Solve the pressure at half resolution.** Pressure is smooth, so a half-scale solve with a
+   bilinear upsample of its gradient costs a quarter of the cells. Same trade `fieldScale` already
+   makes for noise fields, measured 3.0x there. Changes the picture slightly, unlike 1 to 3.
+5. **Fewer iterations, documented per target.** Linear in cost: 5 to 2 is 2.5x, and the picture
+   gets springier. The card should say what a target can afford rather than leaving a user to find
+   4 fps.
+6. **Question whether the full solver belongs on this class of board at all.** See the ColorTrails
+   entry below: a separable noise advection gets a flowing, swirling picture for two passes over
+   the grid and no solve. The fluid's own header already calls it a desktop and P4 effect.
+
+**Why `fluid.mle` runs at 13 fps while the compiled effect runs at 3.** They are not the same
+algorithm, and the script is not a faster fluid: it is not a solver at all. `fluid.mle` calls
+`flowCurl`, which is curl noise, a divergence-free velocity read analytically from noise
+derivatives in one advection pass, with no solve. Per frame at 128x128 the script visits ~16k cells
+and divides nowhere; the compiled solver visits ~429k, of which 318k carry the 64-bit divide. That
+is 27x the work, and the measured gap is only 4.3x because the interpreter gives most of it back in
+dispatch overhead. So a COMPILED curl effect would beat both. What curl cannot do is what a solver
+does: no pressure, no interaction between jets, and no vortex forming out of the flow's own
+history. Whether that is worth 27x is a question for the product owner's eyes.
+
+**Measure on hardware, not on the desktop**: this is an in-order-core property and the desktop
+divides in hardware, which is exactly how the wrong diagnosis above survived a desktop check.
+Record before and after in performance.md per target.
+
 ## Drivers
 
 ### Logarithmic brightness, and a power budget the device knows about (2026-09-02)
@@ -131,6 +242,25 @@ When the bus stalls mid-frame the WS2812 strip is left holding **random / max-br
 **Why it must be a SEPARATE driver, not a flag on `I80LedDriver`:** `esp_lcd` owns the classic I2S DMA and only does whole-frame, so the ring cannot be bolted onto the esp_lcd path — it needs a second classic driver written on the **raw I2S registers** (`i2s_ll` / the LCD-mode register file directly, below esp_lcd, the way the S3/P4 MoonI80 backend sits below esp_lcd on LCD_CAM). Its ISR is small enough to fit the classic's ~70 KB IRAM (hpwit's does), and — the key move — it registers the interrupt **without** `ESP_INTR_FLAG_IRAM` (his source comment: removed "to avoid Cache Disabled but Cached Memory Region Accessed") so the refill ISR is legally permitted to read the PSRAM framebuffer. The trade it accepts vs. our whole-frame path: it **gives up the whole-frame path's WiFi-underrun immunity** (a WiFi burst that starves the refill ISR can glitch a frame), which the ring mitigates with a tunable buffer-count cushion (`nbDmaBuffer`, hpwit's default 6). For a ≤2K-light WiFi-busy install the whole-frame i80 is still the better choice; the ring is for the >2K-light case classic cannot otherwise reach.
 
 **Reference (study, don't copy — write fresh against our architecture):** the line-by-line source read is in [led-driver-psram-ring-analysis.md](led-driver-psram-ring-analysis.md); the ADR framing is [ADR-0014](../adr/0014-own-i80-dma-driver-below-esp-lcd.md) (which calls the internal-RAM-ring-with-CPU-refill "the only thing that can ever work on the classic ESP32," deferred to a phase 2). The S3/P4 MoonI80 ring is the closest in-tree prior art for the ring mechanics (linear self-terminating chain, per-drain refill, drain-count termination) — but its refill is a task and its buffers are internal-only *because the LCD_CAM GDMA can't sustain a PSRAM read at the shift clock*; the classic I2S ring is the inverse (PSRAM framebuffer legal, ISR refill mandatory), so it borrows the *shape* but not the constraints. Do the S3/P4 **ISR-refill + `MM_HOT`** work first (it proves the ISR-refill pattern in-tree on the friendlier unified-DIRAM chips); the classic raw-I2S ring is the next tier up, reusing that pattern where IRAM is genuinely tight.
+
+**Why MoonI80 cannot serve the classic, and what this driver inherits (2026-09-06).** `MoonI80`
+is written against **LCD_CAM**: it drives the GDMA link list and the LCD registers directly
+(`gdma_link_*`, `lcd_ll_*`) to bypass `esp_lcd`'s per-transaction peripheral reset (ADR-0014). The
+classic ESP32 has no LCD_CAM at all; its i80 is the **I2S** block in LCD mode, a different
+peripheral with its own register file (`i2s_ll_*`) and its own DMA, so none of MoonI80's code
+applies and `MoonLedDriver::lanesAvailable()` reports `platform::lcdLanes`, which is 0 there. The
+picker hides the backend rather than gating it, which is why the classic has exactly one parallel
+route today: `esp_lcd`'s I2S backend, whole-frame, internal-RAM-only, capped near 2048 lights.
+This driver is the second route, and it stands in the same relation to `esp_lcd` on I2S as MoonI80
+does on LCD_CAM: same shape, no shared code.
+
+Two things it inherits from the 2026-09-06 i80 work, both worth keeping. It should claim **I2S
+instance 1** and leave 0 for audio, for the reason recorded in the instance-split entry above
+(instance 0 alone carries the PDM converters, nothing needs 1), and owning the peripheral directly
+it can simply ASK for instance 1 rather than steering `esp_lcd` by parking instance 0, which is the
+workaround the current backend needs. And it inherits the package-aware pin refusal: a pin the
+package lacks wedges the flash cache silently, which cost a full day of bisection on the
+ESP32-PICO-V3-02.
 
 ### P4 Parlio streaming ring — lift the P4 Parlio ceiling past ~21K to light-count-independent (WANTED)
 
@@ -420,7 +550,6 @@ not), and a module each.
 
 The manual level + 16-band FFT spectrum has shipped (AudioService; what landed and why is in [lessons.md](../history/lessons.md)). These are the deferred follow-ups, each its own increment:
 
-- **Per-band noise-floor (kill a steady single-frequency hum)** — the bench mic picks up a constant ~258 Hz tone (a mains harmonic via the mic/supply) that lights one band even in silence. A high-pass can't remove it (it's well above the ~40 Hz DC-blocker cutoff) without also killing real bass; the clean fix is a per-band adaptive floor that learns each band's idle baseline and subtracts it, so a constant tone in one band gates to dark while the others stay sensitive. Minimal version ≈ 16 floats of state + ~16 ops/frame. This is the next concrete audio step.
 - **Adaptive conditioning** — auto noise-floor / auto-gain / smoothing so the display self-calibrates to a room ("sound off → dark, sound on → vivid") instead of being tuned by hand. A self-calibrating version was prototyped and removed; the manual `floor`/`gain` is the shipped baseline. Reinvent from scratch when wanted, and **tune it in a quiet room** — a noisy environment (a strong, varying low-frequency ambient) is the adversarial case that made the prototype hard to settle. (The per-band floor above is the first piece of this.)
 - **Adaptive noise gate** — replace the borrowed `squelch`/`floor`-as-gate with a real noise gate: asymmetric bang-bang timing (open fast, close slow), a relative "detect silence" test (thresholds as factors of a learned floor, not absolute sample counts), keying off the RMS envelope we already compute, GEQ/FFT bands left untouched. A softhack007 concept; analysed and judged in full (good idea, industry-standard, but tight on the <30ms budget; decompose into steps rather than overhaul) in AudioService.md § Adaptive noise gate. The recommended sequencing: the per-band floor above is step 1 (its complementary frequency-domain half), the relative-threshold-over-RMS is the cheap high-value cherry-pick as step 2, hysteresis/timing step 3, log-domain + soft-gate optional. Eventually retires the manual squelch.
 - **Pin auto-scan** — detect the mic's `sdPin` with `wsPin`/`sckPin` fixed (a noise-prompt + confirm convenience); ships today with explicit pin controls.
@@ -528,6 +657,8 @@ For driving **lots of LEDs**, internal SRAM is the scarce resource and the paral
 
 The LED-driver increments **shipped**: increment 1 (RMT/WS2812B single-strand on classic ESP32 — [`RmtLedDriver.h`](../../src/light/drivers/RmtLedDriver.h), `RmtSymbol.h`, `platform_esp32_rmt.cpp`) and increment 2 (2a multi-pin RMT, 2b parallel LCD_CAM on the S3 — [`LcdLedDriver.h`](../../src/light/drivers/LcdLedDriver.h) via [`ParallelLedDriver.h`](../../src/light/drivers/ParallelLedDriver.h), `platform_esp32_lcd.cpp`), all with host + on-board-loopback tests, hardware-proven. The locked decisions, file-by-file phases, the WiFi-flicker test-rig analysis, and the bench deviations (8-GPIO i80 bus, 2.67 MHz slot clock, SOC-macro gate, real-frame loopback) are in [lessons.md](../history/lessons.md), the [driver docs](../moonmodules/light/moxygen/RmtLedDriver.md), and the [analysis docs](../history/leddriver-analysis-top-down.md). What remains here is only the work that has **not** shipped and is tracked nowhere else.
 
+- **RMT `int_ena` read-modify-write race (classic ESP32, level-5 refill).** `RMT.int_ena` is one register written by both the render task (arming a frame) and the level-5 refill handler (disarming a finished one), through `rmt_ll_enable_interrupt`'s `|=` / `&=`. A handler firing between the task's read and its write loses the task's update, leaving a channel armed or silent. Never observed: the window is a few instructions and the two writes rarely target one channel, so the symptom would be a stuck channel after hours rather than anything the bench shows. Left unfixed deliberately, because the two obvious guards are both wrong here and each was tried on hardware: `portENTER_CRITICAL_ISR` spins on a lock the level-5 handler has just preempted (it runs above `XCHAL_EXCM_LEVEL` 3 by design) and deadlocks the core, and a compare-and-swap builds but crashes, since `S32C1I` addresses only data memory and a peripheral register raises `EXCCAUSE` 3. The remaining candidate is masking to level 5 (`XTOS_SET_INTLEVEL`) around the two-instruction update, which needs no lock and no atomic bus access; it compiles but is unproven on hardware and wants a soak before it displaces firmware that is flicker-free on two boards.
+
 - **sigrok/fx2lafw cross-check + MoonDeck "LED driver test" Python script** — the independent-clock proof and the run-from-MoonDeck flow ([analysis §5.3](../history/leddriver-analysis-top-down.md)). The on-board RMT-RX loopback (shipped) is the cheap CI correctness gate but a *compromised witness* for WiFi-induced flicker — the RX capture runs on the same ESP32 whose WiFi causes the glitch. The real flicker test is a **sustained capture (seconds) with WiFi associated + a packet flood**, decoding every frame for a byte-slip or reset-gap deviation; it validates the SHIPPED render↔encode split's WiFi isolation (drivers tick on core 1; WiFi lives on core 0). A DSLogic Plus (100 MS/s) upgrade is reactive — only if a flicker reproduces that 24 MS/s can't resolve.
 - **Chunked transfer (Step 4) — the 16K lever, and now the ONE mechanism behind three separate ceilings.** Split a frame into transactions the DMA can actually swallow, feeding them back-to-back. It was scoped as a Parlio fix; it is really a **core-path** fix, and the shift-register expander is only its third beneficiary.
 
@@ -630,27 +761,68 @@ The LED-driver increments **shipped**: increment 1 (RMT/WS2812B single-strand on
 
   **What it costs when it comes:** a small preallocated record queue the built-in writes into, drained from a housekeeping path through the existing platform output seam. The budget and the burst-spent message stay as they are; only where the bytes are written moves. Worth doing when a script is left with a print in it on a real fixture, which is the case the cap exists for.
 
-- **ParallelLedDriver hangs in `esp_lcd_new_i80_bus` on classic ESP32** (2026-09-03). Setting any
-  pin list on a QuinLED Dig-Next-2 (ESP32-PICO-V3-02, IDF v6.1-rc1) resets the board:
-  `TG1WDT_SYS_RESET`, both CPUs stopped at the same PC, no panic and no coredump. Traced to the
-  call itself, which never returns: a log line immediately before `esp_lcd_new_i80_bus` prints and
-  the "created OK" line after it never does. RmtLedDriver on the same board is fine, so it is this
-  bus API rather than the chip or the wiring.
+- **A bus pin that belongs to another peripheral is accepted, and takes the board off the
+  network** (2026-09-06). ParallelLedDriver's classic-ESP32 WR/DC defaults are 18/23, which are
+  IDF's Ethernet MDIO/MDC defaults on the same chip, so an Olimex ESP32-Gateway that added the
+  driver lost its Ethernet link within seconds and looked crashed (the firmware kept ticking on
+  serial; it stayed reachable only through its WiFi fallback). A DC pin of 5, the Gateway's PHY
+  reset line, did the same. The driver's own comment claims 18/23 are "unused by the catalog's
+  boards", which is false for every RMII board. Two fixes, both wanted: (1) classic defaults that
+  collide with nothing common (the RMII set 0/16-19/21-23/25-27, flash 6-11, straps 0/2/12/15,
+  and the Dig-Next-2's relays 5/20-22 and I2C 14/15 all excluded); (2) the pin registry already
+  detects a double claim (`PinsModule::flagConflicts`) but only colors the edge, so a control
+  write that lands on a GPIO another control owns should be refused with a status naming the
+  owner, the way a reserved flash pin already is. A collision with a network pin is worse than
+  most: it ends the session that could have fixed it, and the SMI pins stay re-muxed until a
+  reboot even after the driver releases them.
 
-  **What it is NOT**, each ruled out on the bench: the frame size (hangs at 3200 and 10112 bytes
-  alike, both far inside the internal-DMA budget), duplicate pins parked on WR (hangs with 8
-  distinct data pins), and the WR/DC pin choice (hangs on 10/11, on 21/22 and on 18/23). IDF does
-  declare `SOC_LCD_I80_SUPPORTED` for this target, so the driver is configured for an API the SOC
-  caps say exists.
+- **Bench-verified classic parallel setups, not yet in the catalog** (2026-09-06). Every classic
+  board in `deviceModels.json` ships `RmtLedDriver`, so none carries a `ParallelLedDriver` entry,
+  and the driver's defaults (`clockPin` unset, `dcPin` 33) work on a classic board without one.
+  Two setups are proven on hardware and worth recording before they are lost: the **Olimex
+  ESP32-Gateway** drives 64 lights on GPIO 16 with `clockPin` 32 / `dcPin` 4, and its free pins are
+  scarce enough that a catalog entry should pin them explicitly rather than inherit a default (its
+  Ethernet PHY holds 18/23 as MDIO/MDC and 5 as reset, all of which the old defaults collided
+  with); the **QuinLED Dig-Next-2** drives 256 lights on GPIO 2 with `clockPin` unset / `dcPin` 33.
+  Add them when a classic board actually ships parallel output as its default, rather than
+  speculatively across the other 16 classic boards, none of which has been tested this way.
 
-  **Next step:** call `esp_lcd_new_i80_bus` from a bare IDF example on the same chip and IDF pin. If
-  that hangs too it is upstream and belongs in an IDF issue; if it returns, the difference is in our
-  bus config. Until then classic-ESP32 boards use RmtLedDriver, and `ParallelLedDriver` stays
-  registered and selectable rather than compiled out: hiding it would remove the one path anyone can
-  retest with, and the driver is correct on every LCD_CAM chip.
+- **Classic-ESP32 I2S instance split: LEDs on 1, audio on 0** (2026-09-06, SHIPPED, kept as the
+  rationale). The classic ESP32's parallel LED bus IS an I2S peripheral, so it contends with the
+  audio input, and the 2026-09-03 "hangs in `esp_lcd_new_i80_bus`" entry is closed: that was a pin
+  fault (the ESP32-PICO-V3-02 has no GPIO 18/23, which were the WR/DC defaults), not contention.
+  The split is fixed in silicon rather than chosen: instance 0 alone carries the PDM converters
+  (`I2S_LL_PDM2PCM_SUPPORTED_PORT_MASK` is `1U << 0`), and NOTHING on this chip requires instance
+  1, so the LED bus is the one consumer that can always yield. It therefore takes 1 unconditionally
+  and audio takes 0, which removes the boot race entirely, leaves 0 for every audio source (PDM,
+  standard I2S, line-in ADC, codec), and costs nothing. `esp_lcd` picks the first FREE instance
+  rather than taking one by number, so 1 is claimed by holding 0 across bus creation. For contrast,
+  hpwit's I2SClocklessLedDriver hard-codes `I2S_DEVICE 0` and would take the PDM instance instead.
+  Both sides also retry once a second while they want a busy instance, so the loser of any
+  contention recovers without the user touching a control.
 
-  LCD-MM cannot substitute here. It is `lcdLanes`-only by design (MoonLedDriver.h,
-  `lanesAvailable`) because the classic ESP32's i80 IS the I2S peripheral, which that backend does
-  not implement, so a chip without LCD_CAM has no second parallel route.
+- **Bench-verified classic parallel setups, not yet in the catalog** (2026-09-06). Every classic
+  board in `deviceModels.json` ships `RmtLedDriver`, so none carries a `ParallelLedDriver` entry,
+  and the driver's defaults (`clockPin` unset, `dcPin` 33) work on a classic board without one.
+  Two setups are proven on hardware and worth recording before they are lost: the **Olimex
+  ESP32-Gateway** drives 64 lights on GPIO 16 with `clockPin` 32 / `dcPin` 4, and its free pins are
+  scarce enough that a catalog entry should pin them explicitly rather than inherit a default (its
+  Ethernet PHY holds 18/23 as MDIO/MDC and 5 as reset, all of which the old defaults collided
+  with); the **QuinLED Dig-Next-2** drives 256 lights on GPIO 2 with `clockPin` unset / `dcPin` 33.
+  Add them when a classic board actually ships parallel output as its default, rather than
+  speculatively across the other 16 classic boards, none of which has been tested this way.
+
+- **Classic-ESP32 parallel LEDs and a PDM microphone are exclusive** (2026-09-06). The
+  2026-09-03 "hangs in `esp_lcd_new_i80_bus`" entry is closed: the QuinLED Dig-Next-2 carries an
+  ESP32-PICO-V3-02, whose package has no GPIO 18/23 (its pads serve the in-package flash and PSRAM),
+  and the classic WR/DC defaults were exactly 18/23. The driver now refuses a pin the package lacks
+  and defaults both lines to unset (sunk onto input-only pads). What remains: IDF's LCD mode exists
+  on I2S0 only, and `esp_lcd` falls through to I2S1 when I2S0 is taken, which wedges the chip the
+  same silent way. A PDM microphone is also I2S0-only in hardware, so the platform refuses the bus
+  with a named status when I2S0 is held. Two follow-ups: report the I2S1 fallthrough upstream (it
+  should return an error), and note that the raw-I2S classic driver above (the ring, on I2S1 as
+  hpwit's driver runs) is what lets the two coexist, on top of lifting the 2048-light cap. A
+  standard I2S microphone (INMP441) is content on I2S1 and coexists today when the LED bus claims
+  I2S0 first.
 
 (The shared lane-driver scaffolding extraction — when a 3rd parallel backend lands — is tracked separately under [§ Extract shared lane-driver scaffolding](#extract-shared-lane-driver-scaffolding-when-the-3rd-parallel-backend-lands-deferred) above.)

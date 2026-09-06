@@ -24,7 +24,7 @@ namespace mm {
 /// @card NoiseEffect.gif
 class NoiseEffect : public EffectBase {
 public:
-    const char* tags() const override { return "⚡️💫🌙🐙"; }  // FastLED + MoonLight lineage
+    const char* tags() const override { return "⚡️💫🌙🐙🌫️"; }  // FastLED + MoonLight lineage
     Dim dimensions() const override { return Dim::D3; }
 
     static constexpr const char* kMotionOptions[] = {"drift", "morph"};

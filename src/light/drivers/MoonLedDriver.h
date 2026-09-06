@@ -269,7 +269,7 @@ public:
     /// Status text when the bus will not come up, so the cause is on screen rather than in a serial log.
     /// The two real causes are named: a pin the peripheral cannot route, or no DMA-reachable memory for
     /// the frame (or the ring's pool).
-    const char* initFailMsg() const override { return "LCD-MM: bus init failed — check pins / memory"; }
+    const char* initFailMsg() const override { return "LCD-MM: bus init failed, check pins / memory"; }
     /// The expander needs a backend that can stream its ×8 frame; LCD_CAM is it, and this backend is
     /// LCD_CAM-only, so the answer is simply "wherever this backend runs at all".
     bool supportsPinExpander() const override { return platform::hasLcdCam; }

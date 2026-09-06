@@ -39,7 +39,7 @@ public:
         // every fixture. The x256 that used to sit in the accumulate is the read scale here: same
         // product, and BeatPhase keeps the numerator in 64 bits so a short dt cannot truncate the
         // sub-unit progress to zero and stall the animation. 256 phase units = one beat's wrap.
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const uint32_t phase = phase_.phase(256);
 
         uint8_t step_x = static_cast<uint8_t>(256 / scale_x);

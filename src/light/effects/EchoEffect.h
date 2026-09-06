@@ -61,7 +61,7 @@ public:
         const lengthType w = width(), h = height();
         if (w < 2 || h < 2 || !history_) return;
 
-        phase_.advance(elapsed(), bpm);
+        phase_.advanceTo(elapsed(), bpm);
         const angle16 t = static_cast<angle16>(phase_.phase(65536));
 
         // Feedback is per-frame work driving a per-second look, so every amount below scales by how

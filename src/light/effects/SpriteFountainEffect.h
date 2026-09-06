@@ -25,7 +25,7 @@ namespace mm {
 /// @card SpriteFountainEffect.gif
 class SpriteFountainEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🎶✨👾"; }   // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎶✨👾"; }   // audio-reactive when audioReactive is set
     Dim dimensions() const override { return Dim::D2; }
 
     /// How hard the nozzle throws, and how hard gravity pulls back. Both scale with the grid, so
@@ -55,7 +55,7 @@ public:
     /// tiny fish. That is the difference between a fountain that pulses and one you can read the
     /// music off. In silence nothing is thrown, which is what makes the mode look reactive rather
     /// than merely animated.
-    bool soundReactive = false;
+    bool audioReactive = false;
 
     void defineControls() override {
         controls_.addControl("lift", lift, 20, 200);
@@ -63,7 +63,7 @@ public:
         controls_.addControl("rate", rate, 1, 6);
         controls_.addControl("emitBpm", emitBpm, 10, 240);
         controls_.addControl("size", size, 1, 4);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void prepare() override {
@@ -96,7 +96,7 @@ public:
 
         // Throw from the middle of the floor, leaning either side of straight up. 47152 is just
         // under vertical in angle16, the same nozzle the MoonLive fountain script uses.
-        launch_.advance(elapsed(), 9);
+        launch_.advanceTo(elapsed(), 9);
         const angle16 aim = static_cast<angle16>(
             47152 + (sin16(static_cast<uint16_t>(launch_.phase(65536))) / 8));
         const draw::pos_t speed = static_cast<draw::pos_t>(lift) * height() / 4;
@@ -104,11 +104,11 @@ public:
         const draw::pos_t oy = static_cast<draw::pos_t>(height() - 1) * draw::kSubOne;
         // Audio is read ONCE per frame: the spectrum is the same for every sprite, and a per-sprite
         // read would be the same work times the rate.
-        const AudioFrame* audio = soundReactive ? AudioService::latestFrame() : nullptr;
+        const AudioFrame* audio = audioReactive ? AudioService::latestFrame() : nullptr;
         // The emit CLOCK, separate from the nozzle's sweep: firing every frame tied the plume's
         // density to the frame rate, so the same settings looked completely different on two
         // devices. A beat phase makes `emitBpm` mean launches per minute on any of them.
-        emit_.advance(elapsed(), emitBpm);
+        emit_.advanceTo(elapsed(), emitBpm);
         const uint32_t tick = emit_.phase(2);
         const bool due = tick != lastEmit_;
         lastEmit_ = tick;

@@ -287,6 +287,104 @@ script, pick one number, and move it a long way.
 | `persistence` low to high | tails from a flicker to seconds long | half-life decay |
 | Fluid's `iterations` to 1 (the compiled effect, not the script) | the flow reads springy | the pressure solve is what makes it a fluid |
 
+---
+
+## 10. Making one good: what the failures teach
+
+The kernels above are the easy half. An effect built correctly on them can still be
+dull, and eight built in one day produced four keepers: the other four were dropped
+for being unattractive, too sparse, too slow, or for dying out while the music played.
+What follows is what those four cost, written down so the next effect skips them.
+
+### Measure the picture, do not theorize about it
+
+Every wrong diagnosis on this page came from reasoning about code instead of reading a
+number off the frame. Rendering to a buffer and counting is cheap: what fraction of
+lights are lit, what the brightest one is, how far the picture moves between frames.
+
+One effect rendered pure black for a day. The cause was a scale mismatch (a wave pressed
+15 units deep while the renderer divided slopes by 512, so every ripple came out below the
+visibility threshold), and no amount of reading the code found it. One measurement did:
+brightest light 0, in a simulation whose physics was fine. Cheap checks, in order:
+
+| Reads | Means |
+|---|---|
+| lit fraction near 0 | nothing is reaching the buffer, or everything is below threshold |
+| lit fraction near 1 | the effect has no structure, only a wash |
+| brightest light far below 255 | a scale mismatch between what is computed and what is displayed |
+| frames identical over time | the simulation has converged, or the clock is not advancing |
+
+Pick a quantity that cannot cancel. A center of mass on a symmetric flow stays put while
+every parcel moves, and reports "nothing is happening" about a working effect.
+
+### Match the scales at every seam
+
+Half of the day's bugs were one number expressed in the wrong unit. A control is 0..255,
+a height field rings to ±20000, a fixed-point position carries 16 fractional bits. Every
+place two of those meet is a place where a plausible-looking line silently produces
+nothing, and nothing about it looks wrong on the screen.
+
+Write the conversion where the value crosses, name the constant, and say in a comment what
+range each side speaks in. When something renders black or blindingly white, suspect a
+seam before suspecting the algorithm.
+
+### A simulation converges: keep feeding it
+
+A fluid driven by forces at fixed positions and fixed angles reaches a steady state and
+stops. The picture goes still while the music keeps playing, which reads as a crash. This
+killed one effect outright.
+
+Anything that integrates its own state needs its input to keep changing: rotate where the
+forces are applied, lean their direction, alternate their sense. Motion in the input is
+what keeps motion in the output.
+
+### Frame-rate independence is not optional
+
+A simulation stepped once per rendered frame runs at whatever speed the hardware happens
+to deliver. Measured here: 16x faster on a desktop at 1200 fps than on a device at 60. The
+same effect that reads well on a panel is unusable on a bench.
+
+Accumulate elapsed time and step a fixed amount (16 ms works), capping the catch-up so a
+stall cannot spend a second of frames at once. Everything that moves goes inside that loop,
+including trail fades: leaving the fade outside makes trail length depend on frame rate
+even when the motion does not.
+
+### Fill the screen, and keep filling it
+
+Two effects were dropped for the same reason: at rest they showed too little. An effect is
+judged on the whole panel, so a good one covers it, and covers it in the first second.
+Sparse output at 6% of lights is a demo, not an effect.
+
+Two habits fix most of it. Give the effect something to do with no input at all, so it is
+never blank while someone waits for a beat. And start its clocks primed rather than at
+zero: an effect whose first event is two seconds away reads as broken long before it reads
+as calm.
+
+### Slow is a design property, not a tuning problem
+
+An effect that misses its frame time on the target device is not a slow effect to be
+optimized later. On the S31 one solver-per-frame effect was both too slow and too dull,
+which is the common case rather than a coincidence: the expensive part was not the part
+doing the visual work. Decide what the effect spends its budget on before building it, and
+measure on the smallest device it claims to support.
+
+### Two failed attempts means stop
+
+The rule the project already carries applies hardest here, because a picture always
+suggests one more plausible tweak. Two attempts that do not fix it mean the diagnosis is
+wrong, not the parameters. On this page a second "fix" made an effect visibly worse than
+the bug it targeted.
+
+### Pin the behavior, not just the pixels
+
+A golden-hash test passes happily on an all-black frame, which is how an effect shipped
+rendering nothing while its test stayed green. A hash pins *which* pixels light; it says
+nothing about whether any of them do.
+
+Pin the property that would have caught the failure: that the surface is visible, that it
+still moves after a hundred frames. Then confirm the test fails against the broken code
+before trusting it, because a test that passes on both is measuring nothing.
+
 ## Where to go next
 
 - **[Power functions](../moonmodules/light/power-functions.md)**: the catalog, with what each one costs and who calls it

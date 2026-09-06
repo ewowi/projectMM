@@ -718,7 +718,7 @@ TEST_CASE("spreadLane interleaves rather than striding in order") {
     }
 }
 
-// Sound-reactive sprites: the behavior a viewer judges is "it moves with the music, and it stops
+// audio-reactive sprites: the behavior a viewer judges is "it moves with the music, and it stops
 // when the music stops". Both halves are pinned here because both were explicit requirements.
 TEST_CASE("Silence stands the sprites still") {
     mm::AudioFrame quiet;                       // levelSmoothed 0: no music playing
@@ -773,7 +773,7 @@ TEST_CASE("The spectrum is spread over the live sprites, not the pool capacity")
 }
 
 // Pool::stepDriven is the shared entry point the sprite effects use, so the rules ride on it too.
-TEST_CASE("Sound-reactive stepping moves sprites by their own band, and not at all in silence") {
+TEST_CASE("audio-reactive stepping moves sprites by their own band, and not at all in silence") {
     draw::pos_t x[4] = {0, 0, 0, 0}, y[4] = {0, 0, 0, 0};
     draw::pos_t vx[4] = {256, 256, 256, 256}, vy[4] = {0, 0, 0, 0};
     uint16_t ttl[4] = {1, 1, 1, 1};

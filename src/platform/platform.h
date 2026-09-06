@@ -980,9 +980,13 @@ bool rmtWs2812Transmit(RmtWs2812Handle& h, const uint32_t* symbols, size_t symbo
 // Block until the channel's in-flight transmission finishes, bounded by
 // `timeoutMs` so a wedged peripheral can't hang the render tick forever: a
 // timed-out frame is simply dropped and re-encoded next tick (self-heals). With
-// N channels waited sequentially the worst case is N×timeoutMs; acceptable for
-// the same self-healing reason.
-void rmtWs2812Wait(RmtWs2812Handle& h, uint32_t timeoutMs);
+// N channels waited sequentially the worst case is N×timeoutMs. A timeout is NOT a dropped frame
+// the caller may re-encode over: the peripheral is still reading the symbol buffer, so the driver
+// keeps it untouched and waits again on the next tick (RmtLedDriver::waitForPins).
+/// Block until this channel's transmit completes. Returns false on TIMEOUT, meaning the frame is
+/// STILL CLOCKING OUT: the caller must not touch the symbol buffer it handed over, because the
+/// peripheral is still reading it.
+bool rmtWs2812Wait(RmtWs2812Handle& h, uint32_t timeoutMs);
 
 void rmtWs2812Deinit(RmtWs2812Handle& h);
 
@@ -1061,9 +1065,25 @@ struct I80Ws2812Handle { void* impl = nullptr; };
 // error in esp_lcd: it silently rounds the prescale, which would emit a wrong waveform). A
 // multiplier > 1 is rejected on a backend that cannot DMA the resulting frame from PSRAM (the
 // classic-ESP32 I2S i80 path), rather than driving a frame the hardware can't sustain.
+//
+// `kBusPinUnset` for `wrGpio` / `dcGpio` (or a parked data lane) means "no pin": on the classic
+// ESP32 the backend sinks that line onto an input-only pad, so the peripheral gets the GPIO number
+// it insists on and nothing on the board is driven. The LCD_CAM backends need a real pad for both
+// (the P4 ROM writes outside the GPIO block for an invalid number), so there it is an init failure
+// the driver reports before ever calling this.
+constexpr uint16_t kBusPinUnset = 0xFFFF;
 bool i80Ws2812Init(I80Ws2812Handle& h, const uint16_t* dataPins, uint8_t laneCount,
                    uint16_t wrGpio, uint16_t dcGpio, size_t bufferBytes,
                    bool wantSecondBuffer, uint8_t clockMultiplier = 1);
+// Why the last i80Ws2812Init returned false, when the backend knows more than "it failed"
+// (a peripheral another module holds, a pin this package lacks); nullptr when it does not.
+// The driver shows it as the status, so the user reads the cause rather than "check pins / memory".
+const char* i80Ws2812LastError();
+// Whether the peripheral this backend shares with other modules is free to claim right now. On the
+// classic ESP32 the i80 bus is the I2S peripheral and a PDM microphone wants the same instance, so
+// the driver polls this to rebuild itself once the microphone lets go (and the microphone's own
+// retry does the mirror). Always false where nothing is shared. Cheap: a registry read, no init.
+bool i80Ws2812SharedBusFree();
 
 // DMA frame buffer `buffer` (0 or 1) the driver encodes into (zero-copy).
 // Buffer 0 always exists once init succeeded; buffer 1 is null when the second
@@ -1464,12 +1484,28 @@ bool audioCaptureInit(AudioMicHandle& h, uint8_t deviceIndex, uint32_t sampleRat
 // codec needs the clock to run (the ES8311 won't even answer I2C without it, so
 // AudioService starts I2S *before* audioCodecInit on a codec board). Returns false
 // on failure (bad pins, no I2S, out of memory): the module idles with a status error.
+/// How the microphone speaks, which decides how many pins it needs and how the peripheral is
+/// configured. Two physically different parts, not two settings of one:
+///   - `I2sStd`: a PCM part (INMP441 and friends) on three wires, bit clock + word select + data,
+///     already-decoded samples in Philips framing.
+///   - `Pdm`: a one-bit-stream part on TWO wires, clock + data, decimated to PCM by the
+///     peripheral. Boards with a mic soldered on tend to use these because they are cheaper and
+///     smaller: the QuinLED Dig-Next-2's onboard mic is one (clock GPIO 8, data GPIO 7).
+/// `sckPin` and `mclkPin` are meaningless in PDM mode and ignored.
+enum class MicMode : uint8_t { I2sStd = 0, Pdm = 1 };
+
 bool audioMicInit(AudioMicHandle& h, uint16_t wsPin, uint16_t sdPin,
-                  uint16_t sckPin, int16_t mclkPin, uint32_t sampleRate);
+                  uint16_t sckPin, int16_t mclkPin, uint32_t sampleRate,
+                  MicMode mode = MicMode::I2sStd);
 
 // Read up to `maxSamples` 32-bit samples into `out`; returns the count read
 // (0 if none ready / not initialized). Non-blocking enough for the render tick.
 size_t audioMicRead(AudioMicHandle& h, int32_t* out, size_t maxSamples);
+// Whether the I2S instance a PDM microphone needs is free right now. The mirror of
+// i80Ws2812SharedBusFree: on the classic ESP32 the parallel LED bus is that same instance, so a
+// microphone refused at claim time polls this to come up once the bus lets go. False where nothing
+// is shared (every chip whose i80 is LCD_CAM, and the desktop). Cheap: a registry read, no init.
+bool audioMicSharedBusFree(MicMode mode);
 
 void audioMicDeinit(AudioMicHandle& h);
 

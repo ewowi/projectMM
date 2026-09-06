@@ -14,7 +14,7 @@ namespace mm {
 // reads as one wide block of light without the effect duplicating the broadcast itself (that is the
 // framework's job; see architecture.md § Dimensionality).
 //
-// Prior art: WLED's "Noisemeter" sound-reactive effect (Andrew Tuline / WLED-SR). The fadeRate/width
+// Prior art: WLED's "Noisemeter" audio-reactive effect (Andrew Tuline / WLED-SR). The fadeRate/width
 // knobs, the level→length mapping, the inoise8(row·level + aux0, aux1 + row·level) field sampling, and
 // the bottom-up fill are reproduced here, written fresh on projectMM's EffectBase + the shared draw /
 // palette / noise / beatsin8 primitives. Reads AudioService::latestFrame(); silence → level 0 →
@@ -23,7 +23,7 @@ namespace mm {
 /// Audio-reactive effect: a noise field modulated by sound level.
 class NoiseMeterEffect : public EffectBase {
 public:
-    const char* tags() const override { return "🐙🎵"; }   // WLED origin · audio
+    const char* tags() const override { return "🐙🎵🌫️"; }   // WLED origin · audio
     Dim dimensions() const override { return Dim::D1; }    // writes the x=0 column; extrude fans x and z
 
     // Defaults match WLED's Noisemeter exactly.

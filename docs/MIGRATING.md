@@ -24,6 +24,55 @@ projectMM ships **no migration code**: the persistence layer is robust by defaul
 
 ## Unreleased (`next-iteration`)
 
+### Audio: `floor` is now the silence threshold in both level modes
+
+**Action: re-set `floor` on a device whose microphone you had tuned.**
+Affects any device running the Audio module with a local microphone or line-in.
+
+`levels = automatic` is tuned with `floor` alone: how hard the learner levels, and how far it may
+lift a band, are constants rather than controls, because both act on a per-band range the
+conditioner has already normalized per rig, so one value serves every source.
+
+`floor` is what changes meaning, and why re-setting it is worth a minute. It is now the **silence
+threshold** in both modes: below it a band reads zero and the learner does not learn from it. That
+is what stops a quiet room being amplified to full scale, but it also means a `floor` tuned under
+the old behavior can now gate audible sound. Raise it until a silent room reads still, then stop;
+there is no second knob to compensate with. `gain` remains manual-only and keeps its meaning.
+
+Two behavior changes ride along and need no action. The spectrum now starts at 40 Hz rather than
+~11 Hz, dropping a first band that could only ever hold mains hum, DC drift and rumble. And
+AudioSpectrum's VU bar reads the raw level instead of the smoothed one, because it is the audio
+test instrument and wants maximum response; every other effect keeps the calm smoothed VU.
+
+### MoonBase serves the OTA routes under the application's names
+
+**Action: nothing on most devices; a serial flash on a MoonBase device updated from a browser.**
+Affects the 4 MB classic, `esp32-16mb` and the S3-Zero, the variants that carry MoonBase.
+
+MoonBase served `/install`, `/install-url`, `/boot-app`, `/last-url` and `/cancel` while the
+application served `/api/firmware/upload`, `/api/firmware/url` and `/api/firmware/moonbase`: two
+names for one operation, across images that a single browser page talks to in turn during one
+update. It now serves them under the application's names.
+
+The break is between the two images on a device, not between a device and its config. A device
+whose MoonBase predates this change still answers only the old names, so an updated application
+handing over to it leaves the browser calling routes that image does not have. The way through is
+the same as any MoonBase update: flash both images over serial once
+([building.md](building.md#flashing-a-running-device-over-the-network)). A device flashed serially
+from this version on is consistent and needs nothing.
+
+### `soundReactive` is now `audioReactive`
+
+**Action: re-set one control.** Affects Fish Tank, Flying Toasters, Pacman, Pong, Space Invaders,
+Sprite Fountain and MovingHead, if you had turned the control on.
+
+One name for one thing: the service is `AudioService`, the frame is `AudioFrame`, the effects are
+audio-reactive. The control that made a sprite effect follow the music was the last place still
+calling it sound, so it is renamed rather than left as the odd one out.
+
+A restored config maps the old name to the new one and carries its value. On a device upgraded in
+place the control returns to its default (off); switch it back on where you had it.
+
 ### Noise2D is gone; Noise renders it
 
 **Action: re-set one control.** Affects any device with a Noise2D effect on a layer.

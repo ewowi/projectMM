@@ -26,7 +26,7 @@ namespace mm {
 /// @card MovingHeadEffect.gif
 class MovingHeadEffect : public EffectBase {
 public:
-    const char* tags() const override { return "💫🎶🎯"; }   // audio-reactive when soundReactive is set
+    const char* tags() const override { return "💫🎶🎯"; }   // audio-reactive when audioReactive is set
     /// D3: every head is a fixture with its own aim, so the effect places all of them itself.
     ///
     /// Declaring D1 would be smaller, but it is a promise the Layer keeps by EXTRUDING: it writes
@@ -58,7 +58,7 @@ public:
     /// Move and light with the music: the beam swings wider as the room gets louder, each head
     /// brightens on its own frequency band, and a beat kicks the whole rig. Silence holds it still,
     /// which is what makes the mode read as reactive rather than merely animated.
-    bool soundReactive = false;
+    bool audioReactive = false;
 
     void defineControls() override {
         controls_.addSelect("formation", formation, kFormationNames, kFormationCount);
@@ -68,7 +68,7 @@ public:
         controls_.addControl("tiltRange", tiltRange, 0, 255);
         controls_.addControl("panCenter", panCenter, 0, 255);
         controls_.addControl("tiltCenter", tiltCenter, 0, 255);
-        controls_.addControl("soundReactive", soundReactive);
+        controls_.addControl("audioReactive", audioReactive);
     }
 
     void prepare() override {
@@ -89,8 +89,8 @@ public:
         // Own the background: an effect must not inherit the previous frame's picture.
         draw::fill(cv, RGB{0, 0, 0});
 
-        pan_.advance(elapsed(), panBpm);
-        tilt_.advance(elapsed(), tiltBpm);
+        pan_.advanceTo(elapsed(), panBpm);
+        tilt_.advanceTo(elapsed(), tiltBpm);
 
         // phase(65536) is the angle16 form sin16 takes; truncating to uint16 is the free wrap.
         const uint16_t panPhase  = static_cast<uint16_t>(pan_.phase(65536));
@@ -98,7 +98,7 @@ public:
 
         // Audio is read ONCE per frame, not per head: the spectrum is the same for all of them,
         // and a per-head read would be the same work times the rig size.
-        const AudioFrame* audio = soundReactive ? AudioService::latestFrame() : nullptr;
+        const AudioFrame* audio = audioReactive ? AudioService::latestFrame() : nullptr;
         const bool live = audio && audio->levelSmoothed >= kSilence;
 
         // A beat widens the sweep and flares the color, then decays over ~20 frames. Without the
@@ -110,9 +110,9 @@ public:
         // Loud music opens the beam to its full range, quiet keeps it tight. In silence the rig
         // HOLDS its aim rather than drifting.
         const uint16_t loud = live ? audio->levelSmoothed : 0;
-        const uint8_t swingPan  = soundReactive ? scaleToLevel(panRange, loud) : panRange;
-        const uint8_t swingTilt = soundReactive ? scaleToLevel(tiltRange, loud) : tiltRange;
-        const bool frozen = soundReactive && !live;
+        const uint8_t swingPan  = audioReactive ? scaleToLevel(panRange, loud) : panRange;
+        const uint8_t swingTilt = audioReactive ? scaleToLevel(tiltRange, loud) : tiltRange;
+        const bool frozen = audioReactive && !live;
 
         for (nrOfLightsType i = 0; i < n; i++) {
             const uint32_t hx = i % w, hy = (i / w) % h, hz = i / (w * h);
@@ -132,7 +132,7 @@ public:
             // band, so the rig ripples with the music instead of pulsing as one block.
             const uint8_t hue = static_cast<uint8_t>((panPhase >> 8) + (f.phase >> 8));
             uint8_t bright = 255;
-            if (soundReactive) {
+            if (audioReactive) {
                 const uint8_t band = static_cast<uint8_t>((static_cast<uint32_t>(i) * 16u) / (n ? n : 1));
                 const uint8_t mag = audio ? audio->bands[band > 15 ? 15 : band] : 0;
                 // A floor keeps a head whose own band is quiet visible rather than black, and the
@@ -209,7 +209,7 @@ private:
     /// Widen the sweep on a beat, by up to half again. The beat is the loudest thing in the mode,
     /// so it moves the rig as well as lighting it.
     uint8_t boost(uint8_t range) const {
-        if (!soundReactive || beatDecay_ == 0) return range;
+        if (!audioReactive || beatDecay_ == 0) return range;
         const uint16_t wider = static_cast<uint16_t>(range + (range * beatDecay_) / 512u);
         return static_cast<uint8_t>(wider > 255 ? 255 : wider);
     }

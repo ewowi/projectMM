@@ -127,6 +127,10 @@ TEST_CASE("AudioLevel: a high noiseFloor (dB floor) gates a modest signal to zer
     CHECK(hi.level == 0);
 }
 
+// `gain` reads the same way on both paths (higher = narrower window = hotter), but scales the
+// level's OWN base span rather than being used raw: a block RMS covers far more dB than a single
+// bin's peak, and sharing the raw number left the VU in the bottom third of the meter at the
+// settings that made the spectrum look right (measured on a Dig-Next-2: RMS 39-83 of 255).
 TEST_CASE("AudioLevel: higher gain (narrower dB window) reads a higher level") {
     auto s = sine(512, 8, 1 << 14);
     mm::AudioFrame lo, hi;

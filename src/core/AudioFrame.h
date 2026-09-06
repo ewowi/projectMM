@@ -33,8 +33,20 @@ struct AudioFrame {
                                 // their thresholds sit around 48..144 AFTER a /16. A 0..255 value
                                 // arrives below the squelch floor and reads as near-silence.
                                 // See services.md (Audio) for the trade and the open decision.
-    uint8_t  bands[16] = {};    // 16 log-spaced frequency-band magnitudes, 0..255
-                                // (bass = bands[0], treble = bands[15])
+    uint8_t  bands[16] = {};    // 16 log-spaced frequency-band magnitudes, 0..255, RAW: this
+                                // block's value with no smoothing (bass = bands[0], treble =
+                                // bands[15]). Snaps to a transient; use it to catch a hit.
+    uint8_t  bandsSmoothed[16] = {};  // the same bands with a meter's BALLISTIC: fast rise, slow
+                                // fall (a PPM, IEC 60268-10). Use it for a spectrum display or
+                                // anything that should read as bars rather than twitch. The pair
+                                // mirrors level / levelSmoothed, so raw stays available.
+    uint8_t  flux = 0;          // spectral flux this block, 0..255: how much the spectrum ROSE
+                                // since the last block. The onset detection function.
+    uint8_t  onset = 0;         // 0, or the flux strength on the ONE block a hit was detected:
+                                // flux well above its own recent mean, at most one per refractory
+                                // window. Reactive, with the block's ~23 ms latency. An effect
+                                // that flashes on this catches the drum; one that wants to be
+                                // ON the beat needs the tempo tracker (backlog, audio roadmap).
 };
 
 } // namespace mm
