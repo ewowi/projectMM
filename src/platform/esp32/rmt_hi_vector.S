@@ -44,8 +44,14 @@
 #define sp a1
 
     .data
+    /* 16-byte aligned, because the C handler's stack pointer is derived from the end of this
+     * buffer and the Xtensa windowed ABI requires a 16-byte aligned SP. `.data` gives no such
+     * guarantee on its own. The save area is aligned too: it is addressed with l32i/s32i, which
+     * want 4, and 16 costs nothing here. */
+    .align      16
 _rmt_hi_intr_stack:
     .space      RMT_HI_INTR_STACK
+    .align      16
 _rmt_hi_save_ctx:
     .space      REG_SAVE_AREA_SIZE
 

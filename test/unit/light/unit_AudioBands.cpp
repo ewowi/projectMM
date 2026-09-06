@@ -286,7 +286,9 @@ TEST_CASE("an onset fires once per hit, not once per block the hit lasts, and no
 namespace {
 void feedBlocks(mm::BandConditioner& c, const float db[16], float out[16], int blocks, uint8_t ratio,
                 float maxGain = 24.0f, bool learning = true) {
-    for (int i = 0; i < blocks; i++) c.process(db, out, 23, 60.0f, 40.0f, ratio, maxGain, learning);
+    // gate 0: these cases test the conditioner's mapping, so nothing is gated as silence. The
+    // gate has its own case below.
+    for (int i = 0; i < blocks; i++) c.process(db, out, 23, 60.0f, 40.0f, ratio, maxGain, learning, 0.0f);
 }
 }
 
@@ -347,5 +349,94 @@ TEST_CASE("the peak releases over seconds, not blocks, so one loud bar does not 
     feedBlocks(c, quiet, out, 10, 20);                          // a quarter of a second later
     CHECK(c.peakDb[0] > 85.0f);                                // still remembers the loud bar
     feedBlocks(c, quiet, out, 400, 20);                         // ten seconds later
-    CHECK(c.peakDb[0] < 65.0f);                                // it has let go
+    // It has let go: the peak sits at the band's floor plus the minimum range, rather than
+    // anywhere near the loud bar it was holding.
+    // Converging on the minimum range: the peak falls while the floor drifts up to meet it.
+    CHECK(c.peakDb[0] - c.floorDb[0] < mm::BandConditioner::kMinRangeDb + 2.0f);
+}
+
+// A quiet passage is not silence, and must keep its dynamics. The range clamp used to be the
+// anti-noise mechanism and was set high enough (12 dB) to squash real music: a band swinging 6 dB
+// filled only half the display, which reads as vivid bands with no dynamic range. The silence gate
+// took that job over, so a band with real swing now uses the whole window.
+TEST_CASE("a quietly played band still fills the display, so soft passages keep their dynamics") {
+    mm::BandConditioner c; float soft[16], loud[16], out[16];
+    for (uint8_t b = 0; b < 16; b++) { soft[b] = 70.0f; loud[b] = 76.0f; }   // a 6 dB swing
+
+    // Settle on that swing, above the gate throughout: this is music, not a silent room.
+    for (int i = 0; i < 200; i++) {
+        c.process(soft, out, 23, 60.0f, 40.0f, 20, 40.0f, true, 65.0f);
+        c.process(loud, out, 23, 60.0f, 40.0f, 20, 40.0f, true, 65.0f);
+    }
+    const float atLoud = out[0];
+    c.process(soft, out, 23, 60.0f, 40.0f, 20, 40.0f, true, 65.0f);
+    const float atSoft = out[0];
+
+    // The 6 dB swing is stretched across most of the 40 dB window, not left as 6 dB of it.
+    CHECK(atLoud - atSoft > 20.0f);
+}
+
+// The level path levels itself in automatic mode, the other half of the one `levels` decision:
+// the learner measures the VU's window the way it measures each band's, so the manual floor/gain
+// sliders are genuinely manual-only rather than still shaping the picture from behind a hidden row.
+TEST_CASE("in automatic mode a quiet room and a loud one both fill the level meter") {
+    const size_t n = 512;
+    int32_t quiet[n], loud[n];
+    for (size_t i = 0; i < n; i++) {
+        const float ph = static_cast<float>(i) * 0.1f;
+        // Both above the silence gate (60 dB at floor 0), a hundred times apart: the test is
+        // that each fills its OWN window, not that one of them is silent.
+        quiet[i] = static_cast<int32_t>(std::sin(ph) * 20000000.0f);     // a quiet room
+        loud[i]  = static_cast<int32_t>(std::sin(ph) * 2000000000.0f);   // a hundred times louder
+    }
+
+    // Music, not a test tone: the level has to VARY for a learned window to mean anything, so
+    // each room alternates a soft passage with a loud one. A steady tone correctly reads zero
+    // once the floor follower catches up to it, which is what "nothing is changing" looks like.
+    int32_t quietSoft[n], loudSoft[n];
+    for (size_t i = 0; i < n; i++) { quietSoft[i] = quiet[i] / 2; loudSoft[i] = loud[i] / 2; }
+
+    mm::AudioFrame f{};
+    mm::LevelConditioner a, b;
+    for (int i = 0; i < 100; i++) {
+        mm::computeLevel(quietSoft, n, 0, 128, f, &a, 23);
+        mm::computeLevel(quiet, n, 0, 128, f, &a, 23);
+    }
+    const uint16_t quietLevel = f.level;
+    for (int i = 0; i < 100; i++) {
+        mm::computeLevel(loudSoft, n, 0, 128, f, &b, 23);
+        mm::computeLevel(loud, n, 0, 128, f, &b, 23);
+    }
+    const uint16_t loudLevel = f.level;
+
+    // The two rooms read the SAME, though one is a hundred times louder: each is mapped onto its
+    // own learned window, which is the whole point of levelling the VU automatically. Both sit
+    // above the silence gate (floor 0 here), so this measures the levelling, not the gate.
+    CHECK(quietLevel > 0);
+    CHECK(quietLevel == loudLevel);
+
+    // And manual mode still maps absolutely: the loud room reads higher than the quiet one.
+    mm::computeLevel(quiet, n, 50, 128, f, nullptr, 23);
+    const uint16_t quietManual = f.level;
+    mm::computeLevel(loud, n, 50, 128, f, nullptr, 23);
+    CHECK(f.level > quietManual);
+}
+
+// The silence gate, the fix for a learner that levelled an empty room up to full scale. Measured on
+// a Dig-Next-2: the raw path read flux 0-3 in a quiet room while the conditioner made 33-68 of it,
+// because the lift is dominated by relocating a quiet band up into the display window and silence
+// was relocated as eagerly as music.
+TEST_CASE("a room below the floor reads silent, however hard the learner is asked to level") {
+    mm::BandConditioner c; float quiet[16], out[16];
+    for (uint8_t b = 0; b < 16; b++) quiet[b] = 55.0f;          // below a gate of 60
+
+    // Settle, then ask for the most aggressive levelling available.
+    for (int i = 0; i < 400; i++) c.process(quiet, out, 23, 60.0f, 40.0f, 20, 40.0f, true, 60.0f);
+    for (uint8_t b = 0; b < 16; b++) CHECK(out[b] == 0.0f);
+
+    // And the tables were not dragged down to the room's noise: real music still reads.
+    float music[16];
+    for (uint8_t b = 0; b < 16; b++) music[b] = 80.0f;
+    c.process(music, out, 23, 60.0f, 40.0f, 20, 40.0f, true, 60.0f);
+    for (uint8_t b = 0; b < 16; b++) CHECK(out[b] > 0.0f);
 }

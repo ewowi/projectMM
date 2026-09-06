@@ -24,6 +24,30 @@ projectMM ships **no migration code**: the persistence layer is robust by defaul
 
 ## Unreleased (`next-iteration`)
 
+### Audio: automatic levels tune with one control, and `strength` / `maxBoost` are gone
+
+**Action: re-set `floor` on a device whose microphone you had tuned.**
+Affects any device running the Audio module with a local microphone or line-in.
+
+`levels = automatic` exposed four sliders (`floor`, `gain`, `strength`, `maxBoost`) for what is one
+decision. Two of them are now constants and the mode is tuned with `floor` alone.
+
+`strength` and `maxBoost` acted on the learner's per-band range, which the conditioner has already
+normalized per rig, so one value serves every source: a PDM microphone, an INMP441 and a line-in all
+look the same by the time they reach it. They are fixed at the values that measured best on the
+bench (4 and 24 dB). Persisted keys for both are ignored on load, so nothing has to be cleaned up.
+
+`floor` is what changes meaning, and why re-setting it is worth a minute. It is now the **silence
+threshold** in both modes: below it a band reads zero and the learner does not learn from it. That
+is what stops a quiet room being amplified to full scale, but it also means a `floor` tuned under
+the old behavior can now gate audible sound. Raise it until a silent room reads still, then stop;
+there is no second knob to compensate with. `gain` remains manual-only and keeps its meaning.
+
+Two behavior changes ride along and need no action. The spectrum now starts at 40 Hz rather than
+~11 Hz, dropping a first band that could only ever hold mains hum, DC drift and rumble. And
+AudioSpectrum's VU bar reads the raw level instead of the smoothed one, because it is the audio
+test instrument and wants maximum response; every other effect keeps the calm smoothed VU.
+
 ### MoonBase serves the OTA routes under the application's names
 
 **Action: nothing on most devices; a serial flash on a MoonBase device updated from a browser.**

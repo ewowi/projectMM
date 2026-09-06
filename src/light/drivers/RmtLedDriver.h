@@ -243,6 +243,15 @@ public:
     /// only calls this when effectively-enabled and routes to release() (release) otherwise, so the
     /// channels + buffer free when the driver, or a parent, is disabled.
     void prepare() override {
+        // Drain first. resizeSymbols() may free the symbol buffer and reinit() deletes the
+        // channel, and a prepare arrives from a control change, which can land mid-frame: the
+        // peripheral is then still reading those symbols. Bounded, because a wedged transfer must
+        // not block a config change forever; past the deadline the rebuild proceeds, which is the
+        // pre-existing behavior rather than a new risk.
+        if (txInFlight_) {
+            for (uint8_t attempt = 0; attempt < 4 && txInFlight_; attempt++)
+                txInFlight_ = !waitForPins();
+        }
         parseConfig();
         resizeSymbols();
         reinit();

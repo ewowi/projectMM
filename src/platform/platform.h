@@ -980,8 +980,9 @@ bool rmtWs2812Transmit(RmtWs2812Handle& h, const uint32_t* symbols, size_t symbo
 // Block until the channel's in-flight transmission finishes, bounded by
 // `timeoutMs` so a wedged peripheral can't hang the render tick forever: a
 // timed-out frame is simply dropped and re-encoded next tick (self-heals). With
-// N channels waited sequentially the worst case is N×timeoutMs; acceptable for
-// the same self-healing reason.
+// N channels waited sequentially the worst case is N×timeoutMs. A timeout is NOT a dropped frame
+// the caller may re-encode over: the peripheral is still reading the symbol buffer, so the driver
+// keeps it untouched and waits again on the next tick (RmtLedDriver::waitForPins).
 /// Block until this channel's transmit completes. Returns false on TIMEOUT, meaning the frame is
 /// STILL CLOCKING OUT: the caller must not touch the symbol buffer it handed over, because the
 /// peripheral is still reading it.
@@ -1467,8 +1468,19 @@ bool audioCaptureInit(AudioMicHandle& h, uint8_t deviceIndex, uint32_t sampleRat
 // codec needs the clock to run (the ES8311 won't even answer I2C without it, so
 // AudioService starts I2S *before* audioCodecInit on a codec board). Returns false
 // on failure (bad pins, no I2S, out of memory): the module idles with a status error.
+/// How the microphone speaks, which decides how many pins it needs and how the peripheral is
+/// configured. Two physically different parts, not two settings of one:
+///   - `I2sStd`: a PCM part (INMP441 and friends) on three wires, bit clock + word select + data,
+///     already-decoded samples in Philips framing.
+///   - `Pdm`: a one-bit-stream part on TWO wires, clock + data, decimated to PCM by the
+///     peripheral. Boards with a mic soldered on tend to use these because they are cheaper and
+///     smaller: the QuinLED Dig-Next-2's onboard mic is one (clock GPIO 8, data GPIO 7).
+/// `sckPin` and `mclkPin` are meaningless in PDM mode and ignored.
+enum class MicMode : uint8_t { I2sStd = 0, Pdm = 1 };
+
 bool audioMicInit(AudioMicHandle& h, uint16_t wsPin, uint16_t sdPin,
-                  uint16_t sckPin, int16_t mclkPin, uint32_t sampleRate);
+                  uint16_t sckPin, int16_t mclkPin, uint32_t sampleRate,
+                  MicMode mode = MicMode::I2sStd);
 
 // Read up to `maxSamples` 32-bit samples into `out`; returns the count read
 // (0 if none ready / not initialized). Non-blocking enough for the render tick.

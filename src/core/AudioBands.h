@@ -73,8 +73,12 @@ inline void applyWindow(const int32_t* samples, size_t n, float* out) {
 ///
 /// Computed once per rate change, never per frame: 17 values, and the summing loop below costs the
 /// same `nMag` additions wherever the edges sit.
+/// The lowest frequency the spectrum shows. Below this is infrasound: mains hum, a microphone's DC
+/// drift, footfall and traffic rumble, none of it audible and none of it music. At 22 kHz with a
+/// 1024-bin FFT the first band would otherwise cover 11-22 Hz and display that rumble as bass.
+inline constexpr float kLowestAudibleHz = 40.0f;
+
 inline void audioBandEdges(size_t nMag, uint32_t sampleRate, size_t edge[17]) {
-    (void)sampleRate;                       // the shape is in bins; Hz is the caller's to report
     if (nMag < 17) {                        // pathologically small: one bin each, as far as it goes
         for (uint8_t e = 0; e <= 16; e++) edge[e] = e < nMag ? e : nMag;
         return;
@@ -85,7 +89,18 @@ inline void audioBandEdges(size_t nMag, uint32_t sampleRate, size_t edge[17]) {
         float ix = std::pow(static_cast<float>(nMag), frac);
         edge[e] = static_cast<size_t>(ix);
     }
-    edge[0] = 1;                            // bin 0 is DC
+    // Start at the lowest audible bin rather than at bin 1: bin 0 is DC and the bins just above it
+    // are infrasound (see kLowestAudibleHz). Falls back to bin 1 when the rate is unknown.
+    size_t firstBin = 1;
+    if (sampleRate > 0) {
+        const float binHz = static_cast<float>(sampleRate) / (2.0f * static_cast<float>(nMag));
+        if (binHz > 0.0f) {
+            firstBin = static_cast<size_t>(kLowestAudibleHz / binHz);
+            if (firstBin < 1) firstBin = 1;
+            if (firstBin > nMag / 2) firstBin = nMag / 2;   // never eat half the spectrum
+        }
+    }
+    edge[0] = firstBin;
     edge[16] = nMag;
     // Forward pass: push each edge up so every band owns a bin. This is what the geometric split
     // could not do, and it costs the top bands a bin each, which they have in abundance.
@@ -171,6 +186,10 @@ struct OnsetDetector {
 /// State is 32 floats; the work is 16 logs and a handful of multiplies per block, on the audio
 /// block path and never per light.
 struct BandConditioner {
+    /// The narrowest dynamic range a band is credited with: the shared follower minimum, so the
+    /// band and level paths cannot drift apart (kConditionerMinRangeDb, AudioLevel.h).
+    static constexpr float kMinRangeDb = kConditionerMinRangeDb;
+
     float floorDb[16];
     float peakDb[16];
     bool  primed = false;
@@ -180,23 +199,38 @@ struct BandConditioner {
     /// Condition one block. `db` in, `out` the corrected dB for the display window
     /// [windowFloor, windowFloor + windowSpan]. `dtMs` is the block interval, for the time
     /// constants. `ratioN` is the N of N:1 (1 = off). `learning` false freezes the tables.
+    /// `gateDb` is the silence threshold: a band below it carries no program material, so it
+    /// reads zero and is NOT learned from. Both halves matter. Without the gate the lift is
+    /// dominated by `windowFloor - db`, which relocates a silent band up into the window as
+    /// eagerly as a quiet instrument, and an empty room is displayed at full scale (measured on a
+    /// Dig-Next-2: the raw path read flux 0-3 while the learner made 33-68 of it). And learning
+    /// from silence drags the floor table down to the noise, so the next wobble reads as music.
     void process(const float db[16], float out[16], uint32_t dtMs, float windowFloor,
-                 float windowSpan, uint8_t ratioN, float maxGainDb, bool learning,
+                 float windowSpan, uint8_t ratioN, float maxGainDb, bool learning, float gateDb,
                  float floorRiseDbPerS = 1.0f, float peakReleaseDbPerS = 3.0f) {
         if (!primed) {
-            for (uint8_t b = 0; b < 16; b++) { floorDb[b] = db[b]; peakDb[b] = db[b] + 1.0f; }
+            for (uint8_t b = 0; b < 16; b++) {
+                floorDb[b] = db[b];
+                peakDb[b] = db[b] + kMinRangeDb;
+            }
             primed = true;
         }
         const float dt = static_cast<float>(dtMs) / 1000.0f;
         const float amount = ratioN <= 1 ? 0.0f : 1.0f - 1.0f / static_cast<float>(ratioN);
         for (uint8_t b = 0; b < 16; b++) {
+            // Silence: nothing to show and nothing to learn. Held before the followers so the
+            // tables keep describing the music rather than the room's noise floor.
+            if (db[b] < gateDb) { out[b] = 0.0f; continue; }
             if (learning) {
                 // Floor: a minimum follower that drifts UP slowly, so it forgets a quiet moment
                 // over seconds but takes a new low at once.
                 floorDb[b] = db[b] < floorDb[b] ? db[b] : floorDb[b] + floorRiseDbPerS * dt;
                 // Peak: instant attack, slow release, so it settles on the band's typical top.
                 peakDb[b] = db[b] > peakDb[b] ? db[b] : peakDb[b] - peakReleaseDbPerS * dt;
-                if (peakDb[b] < floorDb[b] + 1.0f) peakDb[b] = floorDb[b] + 1.0f;
+                // Bound the stretch so a collapsed follower cannot divide by ~zero. Small on
+                // purpose: the silence gate above is what keeps a quiet room quiet, and a large
+                // minimum here would flatten real music instead (see kConditionerMinRangeDb).
+                if (peakDb[b] < floorDb[b] + kMinRangeDb) peakDb[b] = floorDb[b] + kMinRangeDb;
             }
             // Where this band's own range would put the value inside the window, and how far
             // from the raw value that is; `amount` decides how much of that move is taken.
@@ -255,7 +289,7 @@ inline void magnitudesToBands(const float* mag, size_t nMag, uint32_t sampleRate
     if (cond) {
         float out[16];
         cond->process(bandDb, out, dtMs, windowFloorDb(noiseFloor), windowSpanDb(gain), ratioN,
-                      maxGainDb, learning);
+                      maxGainDb, learning, windowFloorDb(noiseFloor));
         for (uint8_t b = 0; b < 16; b++) bands[b] = bandDb[b] <= 0.0f ? 0 : dbToByte(out[b], noiseFloor, gain);
     } else {
         for (uint8_t b = 0; b < 16; b++) bands[b] = bandDb[b] <= 0.0f ? 0 : dbToByte(bandDb[b], noiseFloor, gain);

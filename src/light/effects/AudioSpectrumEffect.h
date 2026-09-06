@@ -52,10 +52,11 @@ public:
 
         if (levelRow) {
             const lengthType y = static_cast<lengthType>(h - 1);   // bottom row
-            // The VU bar uses the SMOOTHED level so it glides with the music instead of jittering
-            // per audio block — the calm VU look. (The spectrum bars above use the raw per-band
-            // magnitudes, which stay snappy.)
-            const uint16_t vu = f->levelSmoothed;
+            // The RAW level, like the spectrum bars above: this effect is the audio test
+            // instrument, so it shows what the analyzer produces rather than a prettified version
+            // of it. The smoothed level (levelSmoothed, a one-pole EMA) lags by ~70 ms, which is
+            // the calm VU look every other effect wants and the wrong thing for judging response.
+            const uint16_t vu = f->level;
             const lengthType litW = static_cast<lengthType>(
                 static_cast<uint32_t>(vu > 255 ? 255 : vu) * w / 255u);
             // Green → red across the width, the VU-meter look. D2: write the z=0 slice only;

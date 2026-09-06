@@ -98,8 +98,69 @@ struct DcBlocker {
 // through the same log/dB window the bands use (magToByte), so the VU meter and
 // the spectrum share one scaling and the noiseFloor/gain knobs mean the same
 // thing for both. Empty/null input yields zero (silence), never a crash.
+//
+/// The narrowest dynamic range a learned follower credits its input with, shared by the level and
+/// the per-band conditioners so the two paths behave alike. It exists only to bound
+/// `windowSpan / range`, which a collapsed follower would otherwise drive toward infinity.
+///
+/// Deliberately SMALL, because the silence gate is what keeps a quiet room quiet and this is not a
+/// second mechanism for the same job. A large value flattens real music instead: at 12 dB a band
+/// swinging 6 dB filled only half the display, which reads as "vivid bands, no dynamic range".
+/// The gate can tell silence from a quiet passage, which a range clamp fundamentally cannot, so
+/// the gate does that work and this stays out of the way.
+inline constexpr float kConditionerMinRangeDb = 3.0f;
+
+/// The level's own minimum, larger than a band's for the same reason its gate is lower: this
+/// follows a whole block's RMS, which swings far less than any single band's peak. At the band
+/// value the meter stretched that small natural variation to full scale and sat pinned at 255.
+inline constexpr float kLevelMinRangeDb = 20.0f;
+
+/// The manual level window's width at full `gain`. The level is scaled BY gain rather than sized
+/// from it: `gain` sizes the band window directly, but a block RMS covers far more dB than a single
+/// bin's peak, so feeding one raw number to both left the VU in the bottom third of the meter at
+/// the settings that made the spectrum look right. Scaling keeps the knob meaning what it means
+/// (higher gain = narrower window = hotter meter) in both paths. 20 dB is the room's measured
+/// speech-to-quiet range on the bench parts.
+inline constexpr float kLevelWindowSpanDb = 20.0f;
+
+/// The manual level window's span for a given `gain`: the base at gain 255, widening to twice that
+/// as gain falls to 0, so the control spans a useful range either side of its midpoint.
+inline float levelWindowSpanDb(uint16_t gain) {
+    return kLevelWindowSpanDb * (2.0f - static_cast<float>(gain) / 255.0f);
+}
+
+/// How far below the display window a level has to fall before it counts as silence rather than a
+/// quiet passage. The window floor is what a manual setup shows as its lowest visible level, so
+/// anything at it is audible; the margin is what separates "quiet" from "nothing at all".
+inline constexpr float kMuteMarginDb = 20.0f;
+
+/// The level's own floor and peak, learned the way BandConditioner learns a band's. With `levels`
+/// automatic the display window is measured rather than dialed in, so the VU levels itself along
+/// with the bands and the manual sliders are genuinely manual-only. Same followers and the same
+/// minimum range as the band tables, so the two paths behave alike and cannot disagree.
+struct LevelConditioner {
+    static constexpr float kMinRangeDb = kLevelMinRangeDb;
+
+    float floorDb = 0.0f;
+    float peakDb = 0.0f;
+    bool  primed = false;
+
+    /// Learn from this block's RMS and return the dB window [floor, floor+span] to display it in.
+    void observe(float db, uint32_t dtMs, float& windowFloor, float& windowSpan,
+                 float floorRiseDbPerS = 1.0f, float peakReleaseDbPerS = 3.0f) {
+        if (!primed) { floorDb = db; peakDb = db + kMinRangeDb; primed = true; }
+        const float dt = static_cast<float>(dtMs) / 1000.0f;
+        floorDb = db < floorDb ? db : floorDb + floorRiseDbPerS * dt;
+        peakDb  = db > peakDb  ? db : peakDb - peakReleaseDbPerS * dt;
+        if (peakDb < floorDb + kMinRangeDb) peakDb = floorDb + kMinRangeDb;
+        windowFloor = floorDb;
+        windowSpan  = peakDb - floorDb;
+    }
+};
+
 inline void computeLevel(const int32_t* samples, size_t n,
-                         uint16_t noiseFloor, uint16_t gain, AudioFrame& frame) {
+                         uint16_t noiseFloor, uint16_t gain, AudioFrame& frame,
+                         LevelConditioner* cond = nullptr, uint32_t dtMs = 23) {
     if (!samples || n == 0) {
         frame.level = 0;
         return;
@@ -119,7 +180,32 @@ inline void computeLevel(const int32_t* samples, size_t n,
     const uint64_t meanSq = sqSum / static_cast<uint64_t>(n);
     const uint64_t rms = isqrt64(meanSq);
 
-    frame.level = magToByte(static_cast<float>(rms), noiseFloor, gain);
+    // Automatic: the window is the level's own learned range, so a quiet room and a loud one both
+    // fill the meter. Manual: the floor/gain sliders, exactly as before.
+    if (cond) {
+        const float db = rms <= 1 ? 0.0f : 20.0f * std::log10(static_cast<float>(rms));
+        // Silence for the LEVEL is not the same number as silence for a band, and the caller has
+        // already halved `floor` for that reason: a band gate reads a single bin's PEAK magnitude
+        // while this reads the whole block's RMS, which for real music sits well below the
+        // strongest bin. Gating both at the band threshold left the spectrum lively with the VU
+        // pinned at zero (measured: flux 32-100 against level 0). The window floor is the level a
+        // manual setup DISPLAYS, so it is audible by definition; silence is kMuteMarginDb below it.
+        const float gateDb = windowFloorDb(noiseFloor) - kMuteMarginDb;
+        if (db < gateDb) { frame.level = 0; return; }
+        float wFloor = 0.0f, wSpan = 1.0f;
+        cond->observe(db, dtMs, wFloor, wSpan);
+        const float t = (db - wFloor) / wSpan;
+        const float clamped = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        frame.level = static_cast<uint8_t>(clamped * 255.0f + 0.5f);
+        return;
+    }
+    // Manual. `floor` positions the window and `gain` scales its width, both as they do for the
+    // bands, but from the level's own base span (see levelWindowSpanDb).
+    const float db = rms <= 1 ? 0.0f : 20.0f * std::log10(static_cast<float>(rms));
+    const float wFloor = windowFloorDb(noiseFloor);
+    const float t = (db - wFloor) / levelWindowSpanDb(gain);
+    const float clamped = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    frame.level = rms <= 1 ? 0 : static_cast<uint8_t>(clamped * 255.0f + 0.5f);
 }
 
 } // namespace mm

@@ -104,6 +104,7 @@ public:
     }
     uint8_t       prevBands_[16] = {};   ///< last block's raw bands, the flux's reference
     BandConditioner cond_;               ///< the per-band floor and peak tables, learned live
+    LevelConditioner levelCond_;         ///< the same, for the overall level (VU) in automatic mode
     OnsetDetector onset_;                ///< the hit decision, with its running mean and refractory
 
     static constexpr size_t kBlock = 512;
@@ -131,6 +132,10 @@ public:
     /// OS capture device (desktop): an index into platform::audioCaptureDevices' list.
     /// 0 = "default" (order-stable). Changing it re-opens capture live (no reboot).
     uint8_t device = 0;
+    /// Which kind of microphone is wired: 0 = I2S (three wires, an INMP441-class PCM part),
+    /// 1 = PDM (two wires, the one-bit part boards solder on, such as the QuinLED Dig-Next-2's).
+    /// PDM has no bit clock and no master clock, so those two pins hide when it is selected.
+    uint8_t micMode = 0;
     int8_t sckPin = -1;          ///< bit clock / BCLK (-1 = unset). Changing it re-creates the I2S channel live (no reboot).
     int8_t wsPin = -1;           ///< word-select / LRCLK (-1 = unset). Changing it re-creates the I2S channel live.
     int8_t sdPin = -1;           ///< serial data in / DOUT (-1 = unset). Changing it re-creates the I2S channel live.
@@ -159,8 +164,17 @@ public:
     /// per-band learner). One choice rather than two overlapping mechanisms, so a slider on screen
     /// is always a slider that does something.
     uint8_t  levels = 1;
-    uint8_t  ratio = 4;          ///< automatic: N of N:1, how hard the bands are levelled
-    uint8_t  maxGain = 24;       ///< automatic: the most a band is lifted, in dB
+    /// Automatic levelling, fixed rather than exposed. Both act on the LEARNED per-band range,
+    /// which the conditioner has already normalized per rig, so one value serves every source: a
+    /// PDM mic, an INMP441 and a line-in all arrive looking the same. What differs between them is
+    /// the absolute level, and that is `floor`'s job, the one knob automatic mode keeps.
+    ///
+    /// 4 = N of N:1, correcting three quarters of a band's deviation: enough to take out the rig's
+    /// coloration, short of the high ratios that cause cross-spectral pumping. 24 dB caps the lift
+    /// for a rig whose bands sit far apart; with silence gated it rarely binds, and it is kept as
+    /// the guard rather than a tuning knob.
+    static constexpr uint8_t kRatio = 4;
+    static constexpr uint8_t kMaxGainDb = 24;
     /// Simulated-audio pattern (only shown, and only used, in Simulate mode, see `mode`). The synthesized
     /// signal drives audio-reactive effects with no mic or music, for a preview/demo device or a test:
     ///   `music`: a plausible song: multi-sine bands + a swelling volume + a periodic beat + a
@@ -227,10 +241,17 @@ public:
         // GPIOs; order follows the I2S datasheet: clocks, data, optional MCLK). On desktop it is
         // the OS capture device instead. ---
         if constexpr (platform::hasI2sMic) {
-            controls_.addPin("sckPin", sckPin);        controls_.setHidden(controls_.count() - 1, !localMode);
+            // A PDM part has neither a bit clock nor a master clock: its two wires are the clock
+            // the chip drives (wsPin) and the data line (sdPin). Showing the other two would
+            // invite a user to set pins nothing reads.
+            static constexpr const char* kMicModeOptions[] = {"I2S", "PDM"};
+            controls_.addSelect("micMode", micMode, kMicModeOptions, 2);
+            controls_.setHidden(controls_.count() - 1, !localMode);
+            const bool pdm = micMode == 1;
+            controls_.addPin("sckPin", sckPin);        controls_.setHidden(controls_.count() - 1, !localMode || pdm);
             controls_.addPin("wsPin", wsPin);          controls_.setHidden(controls_.count() - 1, !localMode);
             controls_.addPin("sdPin", sdPin);          controls_.setHidden(controls_.count() - 1, !localMode);
-            controls_.addPin("mclkPin", mclkPin);      controls_.setHidden(controls_.count() - 1, !localMode);
+            controls_.addPin("mclkPin", mclkPin);      controls_.setHidden(controls_.count() - 1, !localMode || pdm);
         }
         if constexpr (platform::hasAudioCapture) {
             // The OS capture input: entry 0 "default" follows the system setting; loopback
@@ -263,15 +284,15 @@ public:
         controls_.addSelect("levels", levels, kLevelsOptions, 2);
         controls_.setHidden(controls_.count() - 1, !localMode);
         const bool manual = levels == 0;
-        // Shown in BOTH modes, because they are not only the manual band mapping: computeLevel
-        // reads them for `level` and `levelSmoothed` (the volume every VU-style effect follows)
-        // whatever `levels` says. Hiding them in automatic left a user unable to reach values
-        // that were still shaping the picture.
+        // `floor` is shown in BOTH modes because it means one thing in both: below this is not
+        // signal. Manual maps the display from it; automatic gates silence with it, which is what
+        // stops the learner amplifying an empty room to full scale. `gain` sets the manual window's
+        // span and has no automatic counterpart, so it hides with the mode that uses it.
         controls_.addControl("floor", floor, 0, 255); controls_.setHidden(controls_.count() - 1, !localMode);
-        controls_.addControl("gain", gain, 1, 255);   controls_.setHidden(controls_.count() - 1, !localMode);
-        // Automatic: how hard it levels the bands, and the one guard that keeps it honest.
-        controls_.addControl("strength", ratio, 1, 20);  controls_.setHidden(controls_.count() - 1, !localMode || manual);
-        controls_.addControl("maxBoost", maxGain, 0, 40); controls_.setHidden(controls_.count() - 1, !localMode || manual);
+        controls_.addControl("gain", gain, 1, 255);   controls_.setHidden(controls_.count() - 1, !localMode || !manual);
+        // Automatic exposes no levelling knobs: `strength` and `maxBoost` measurably changed the
+        // numbers but nothing a viewer could see once silence was gated, and both are
+        // source-independent (see kRatio), so they are constants.
         // "send audio": broadcast the locally-analyzed frame. Only meaningful in Local mode.
         if constexpr (platform::hasNetwork) {
             controls_.addControl("send audio", send);
@@ -314,6 +335,9 @@ public:
     bool affectsPrepare(const char* name) const override {
         return std::strcmp(name, "wsPin") == 0 || std::strcmp(name, "sdPin") == 0
             || std::strcmp(name, "sckPin") == 0 || std::strcmp(name, "mclkPin") == 0
+            // Re-creates the I2S channel in the other mode, AND hides or shows the two clock
+            // pins PDM does not have.
+            || std::strcmp(name, "micMode") == 0
             || std::strcmp(name, "device") == 0
             || std::strcmp(name, "sampleRate") == 0 || std::strcmp(name, "mode") == 0
             || std::strcmp(name, "send audio") == 0 || std::strcmp(name, "syncPort") == 0
@@ -453,7 +477,9 @@ public:
         // with how loud the room is. Uses a gentler floor than the bands (half),
         // so the VU keeps moving with volume instead of being gated hard like the
         // per-band display.
-        computeLevel(samples_, kBlock, static_cast<uint8_t>(floor / 2), gain, frame_);
+        computeLevel(samples_, kBlock, static_cast<uint8_t>(floor / 2), gain, frame_,
+                     levels == 1 ? &levelCond_ : nullptr,
+                     static_cast<uint32_t>(kBlock * 1000u / sampleRate()));
 
         // Smoothed level: a one-pole exponential moving average of the raw `level`, so effects that
         // want a calm, breathing VU (rather than the raw value's snap-to-transient) read a value that
@@ -470,7 +496,7 @@ public:
                           frame_.bands, peakHz, peakMag,
                           levels == 1 ? &cond_ : nullptr,
                           static_cast<uint32_t>(kBlock * 1000u / sampleRate()),
-                          ratio, static_cast<float>(maxGain), true);
+                          kRatio, static_cast<float>(kMaxGainDb), true);
         finishBands();
 
         // Peak frequency: the exact-Hz FFT bin, held when there's no real signal so
@@ -563,7 +589,9 @@ public:
                                    && platform::audioCodecType == platform::CodecType::None;
         if (directMicLive) {
             if (micSamples1s_ == 0)
-                setStatus("mic: no samples, check sckPin / wsPin (I2S clocks)", Severity::Warning);
+                setStatus(micMode == 1 ? "mic: no samples, check wsPin (PDM clock)"
+                                       : "mic: no samples, check sckPin / wsPin (I2S clocks)",
+                          Severity::Warning);
             else if (micNonzero1s_ == 0)
                 setStatus("mic: data line silent, check sdPin (SD/DOUT) + mic power", Severity::Warning);
             else if (micStatusStale_)
@@ -694,8 +722,13 @@ private:
         // don't attempt an I2S init: initializing I2S on unset pins is what hung a
         // mic-less board's boot. GPIO 0 IS a valid mic pin now (the sentinel is -1,
         // not 0), so the guard tests < 0, not == 0.
-        if (sckPin < 0 || wsPin < 0 || sdPin < 0) {
-            setStatus("mic: set sckPin / wsPin / sdPin", Severity::Status);
+        // A PDM part has two wires, not three: the clock this chip drives (wsPin) and the data
+        // line (sdPin). Requiring a bit clock there would leave a correctly wired board sitting
+        // at "set sckPin" forever, with a pin it does not have.
+        const bool pdm = micMode == 1;
+        if (wsPin < 0 || sdPin < 0 || (!pdm && sckPin < 0)) {
+            setStatus(pdm ? "mic: set wsPin (clock) / sdPin (data)"
+                          : "mic: set sckPin / wsPin / sdPin", Severity::Status);
             return;
         }
         // Bring up the I2S channel FIRST. Where MCLK comes from depends on the board:
@@ -710,7 +743,8 @@ private:
                            ? mclkPin : static_cast<int16_t>(platform::audioCodecPins.mclk);
         inited_ = platform::audioMicInit(mic_, static_cast<uint16_t>(wsPin),
                                          static_cast<uint16_t>(sdPin),
-                                         static_cast<uint16_t>(sckPin), mclk, sampleRate());
+                                         static_cast<uint16_t>(sckPin), mclk, sampleRate(),
+                                         static_cast<platform::MicMode>(micMode));
         if (!inited_) {
             setStatus(kInitFailMsg, Severity::Error);
             return;
