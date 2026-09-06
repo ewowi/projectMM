@@ -15,10 +15,23 @@
 # DELETE THIS FILE once release.yml's publish-container job has run for real on main. It exists to
 # de-risk that first run, not to become a second way of releasing.
 #
-# Manual only, and it never touches the `latest` tag or any vX.Y.Z tag.
+# It never touches the `latest` tag or any vX.Y.Z tag.
 name: container test (temporary, prerelease)
 
+# PUSH on this one branch, plus manual. The push trigger is what makes it runnable at all: a
+# `workflow_dispatch` workflow is addressable only once its file sits on the DEFAULT branch, because
+# GitHub resolves the name you dispatch against main, so dispatching this from its own branch fails
+# with a 404 and no Run button appears. A push trigger has no such requirement, and this is how
+# `moonbase-test-release.yml` was run for the MoonBase test releases.
+#
+# Scoped to `docker-container` so it cannot follow the code onto main: this file is deleted once
+# release.yml's publish-container job has run for real, and until then the branch name IS the guard.
+# `workflow_dispatch` stays for a re-run without an empty commit, and starts working once main has
+# the file.
 on:
+  push:
+    branches:
+      - docker-container
   workflow_dispatch:
 
 jobs:
