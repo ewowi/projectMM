@@ -243,6 +243,25 @@ When the bus stalls mid-frame the WS2812 strip is left holding **random / max-br
 
 **Reference (study, don't copy — write fresh against our architecture):** the line-by-line source read is in [led-driver-psram-ring-analysis.md](led-driver-psram-ring-analysis.md); the ADR framing is [ADR-0014](../adr/0014-own-i80-dma-driver-below-esp-lcd.md) (which calls the internal-RAM-ring-with-CPU-refill "the only thing that can ever work on the classic ESP32," deferred to a phase 2). The S3/P4 MoonI80 ring is the closest in-tree prior art for the ring mechanics (linear self-terminating chain, per-drain refill, drain-count termination) — but its refill is a task and its buffers are internal-only *because the LCD_CAM GDMA can't sustain a PSRAM read at the shift clock*; the classic I2S ring is the inverse (PSRAM framebuffer legal, ISR refill mandatory), so it borrows the *shape* but not the constraints. Do the S3/P4 **ISR-refill + `MM_HOT`** work first (it proves the ISR-refill pattern in-tree on the friendlier unified-DIRAM chips); the classic raw-I2S ring is the next tier up, reusing that pattern where IRAM is genuinely tight.
 
+**Why MoonI80 cannot serve the classic, and what this driver inherits (2026-09-06).** `MoonI80`
+is written against **LCD_CAM**: it drives the GDMA link list and the LCD registers directly
+(`gdma_link_*`, `lcd_ll_*`) to bypass `esp_lcd`'s per-transaction peripheral reset (ADR-0014). The
+classic ESP32 has no LCD_CAM at all; its i80 is the **I2S** block in LCD mode, a different
+peripheral with its own register file (`i2s_ll_*`) and its own DMA, so none of MoonI80's code
+applies and `MoonLedDriver::lanesAvailable()` reports `platform::lcdLanes`, which is 0 there. The
+picker hides the backend rather than gating it, which is why the classic has exactly one parallel
+route today: `esp_lcd`'s I2S backend, whole-frame, internal-RAM-only, capped near 2048 lights.
+This driver is the second route, and it stands in the same relation to `esp_lcd` on I2S as MoonI80
+does on LCD_CAM: same shape, no shared code.
+
+Two things it inherits from the 2026-09-06 i80 work, both worth keeping. It should claim **I2S
+instance 1** and leave 0 for audio, for the reason recorded in the instance-split entry above
+(instance 0 alone carries the PDM converters, nothing needs 1), and owning the peripheral directly
+it can simply ASK for instance 1 rather than steering `esp_lcd` by parking instance 0, which is the
+workaround the current backend needs. And it inherits the package-aware pin refusal: a pin the
+package lacks wedges the flash cache silently, which cost a full day of bisection on the
+ESP32-PICO-V3-02.
+
 ### P4 Parlio streaming ring — lift the P4 Parlio ceiling past ~21K to light-count-independent (WANTED)
 
 **Port the ring concept to the P4 Parlio path**, to drive far more than its current whole-frame ceiling. troyhacks' MoonLight Parlio driver reaches **~21K LEDs RGB (~16K RGBW)** at 16 lanes — but NOT by materialising the whole encoded frame: he stages into a **fixed ~512 KB PSRAM buffer** and DMAs it out in **64 KB chunks** (`max_transfer_size = 65535`), so the DMA never needs the whole frame contiguous. That is the SAME idea as our MoonI80 ring, applied to Parlio on the P4 (where — unlike the S3 shift clock — the DMA *can* sustain PSRAM reads at the WS2812 rate). His ceiling is a *chosen buffer size*, not a hardware wall, so it caps at ~21K.
@@ -531,7 +550,6 @@ not), and a module each.
 
 The manual level + 16-band FFT spectrum has shipped (AudioService; what landed and why is in [lessons.md](../history/lessons.md)). These are the deferred follow-ups, each its own increment:
 
-- **Per-band noise-floor (kill a steady single-frequency hum)** — the bench mic picks up a constant ~258 Hz tone (a mains harmonic via the mic/supply) that lights one band even in silence. A high-pass can't remove it (it's well above the ~40 Hz DC-blocker cutoff) without also killing real bass; the clean fix is a per-band adaptive floor that learns each band's idle baseline and subtracts it, so a constant tone in one band gates to dark while the others stay sensitive. Minimal version ≈ 16 floats of state + ~16 ops/frame. This is the next concrete audio step.
 - **Adaptive conditioning** — auto noise-floor / auto-gain / smoothing so the display self-calibrates to a room ("sound off → dark, sound on → vivid") instead of being tuned by hand. A self-calibrating version was prototyped and removed; the manual `floor`/`gain` is the shipped baseline. Reinvent from scratch when wanted, and **tune it in a quiet room** — a noisy environment (a strong, varying low-frequency ambient) is the adversarial case that made the prototype hard to settle. (The per-band floor above is the first piece of this.)
 - **Adaptive noise gate** — replace the borrowed `squelch`/`floor`-as-gate with a real noise gate: asymmetric bang-bang timing (open fast, close slow), a relative "detect silence" test (thresholds as factors of a learned floor, not absolute sample counts), keying off the RMS envelope we already compute, GEQ/FFT bands left untouched. A softhack007 concept; analysed and judged in full (good idea, industry-standard, but tight on the <30ms budget; decompose into steps rather than overhaul) in AudioService.md § Adaptive noise gate. The recommended sequencing: the per-band floor above is step 1 (its complementary frequency-domain half), the relative-threshold-over-RMS is the cheap high-value cherry-pick as step 2, hysteresis/timing step 3, log-domain + soft-gate optional. Eventually retires the manual squelch.
 - **Pin auto-scan** — detect the mic's `sdPin` with `wsPin`/`sckPin` fixed (a noise-prompt + confirm convenience); ships today with explicit pin controls.
@@ -743,27 +761,68 @@ The LED-driver increments **shipped**: increment 1 (RMT/WS2812B single-strand on
 
   **What it costs when it comes:** a small preallocated record queue the built-in writes into, drained from a housekeeping path through the existing platform output seam. The budget and the burst-spent message stay as they are; only where the bytes are written moves. Worth doing when a script is left with a print in it on a real fixture, which is the case the cap exists for.
 
-- **ParallelLedDriver hangs in `esp_lcd_new_i80_bus` on classic ESP32** (2026-09-03). Setting any
-  pin list on a QuinLED Dig-Next-2 (ESP32-PICO-V3-02, IDF v6.1-rc1) resets the board:
-  `TG1WDT_SYS_RESET`, both CPUs stopped at the same PC, no panic and no coredump. Traced to the
-  call itself, which never returns: a log line immediately before `esp_lcd_new_i80_bus` prints and
-  the "created OK" line after it never does. RmtLedDriver on the same board is fine, so it is this
-  bus API rather than the chip or the wiring.
+- **A bus pin that belongs to another peripheral is accepted, and takes the board off the
+  network** (2026-09-06). ParallelLedDriver's classic-ESP32 WR/DC defaults are 18/23, which are
+  IDF's Ethernet MDIO/MDC defaults on the same chip, so an Olimex ESP32-Gateway that added the
+  driver lost its Ethernet link within seconds and looked crashed (the firmware kept ticking on
+  serial; it stayed reachable only through its WiFi fallback). A DC pin of 5, the Gateway's PHY
+  reset line, did the same. The driver's own comment claims 18/23 are "unused by the catalog's
+  boards", which is false for every RMII board. Two fixes, both wanted: (1) classic defaults that
+  collide with nothing common (the RMII set 0/16-19/21-23/25-27, flash 6-11, straps 0/2/12/15,
+  and the Dig-Next-2's relays 5/20-22 and I2C 14/15 all excluded); (2) the pin registry already
+  detects a double claim (`PinsModule::flagConflicts`) but only colors the edge, so a control
+  write that lands on a GPIO another control owns should be refused with a status naming the
+  owner, the way a reserved flash pin already is. A collision with a network pin is worse than
+  most: it ends the session that could have fixed it, and the SMI pins stay re-muxed until a
+  reboot even after the driver releases them.
 
-  **What it is NOT**, each ruled out on the bench: the frame size (hangs at 3200 and 10112 bytes
-  alike, both far inside the internal-DMA budget), duplicate pins parked on WR (hangs with 8
-  distinct data pins), and the WR/DC pin choice (hangs on 10/11, on 21/22 and on 18/23). IDF does
-  declare `SOC_LCD_I80_SUPPORTED` for this target, so the driver is configured for an API the SOC
-  caps say exists.
+- **Bench-verified classic parallel setups, not yet in the catalog** (2026-09-06). Every classic
+  board in `deviceModels.json` ships `RmtLedDriver`, so none carries a `ParallelLedDriver` entry,
+  and the driver's defaults (`clockPin` unset, `dcPin` 33) work on a classic board without one.
+  Two setups are proven on hardware and worth recording before they are lost: the **Olimex
+  ESP32-Gateway** drives 64 lights on GPIO 16 with `clockPin` 32 / `dcPin` 4, and its free pins are
+  scarce enough that a catalog entry should pin them explicitly rather than inherit a default (its
+  Ethernet PHY holds 18/23 as MDIO/MDC and 5 as reset, all of which the old defaults collided
+  with); the **QuinLED Dig-Next-2** drives 256 lights on GPIO 2 with `clockPin` unset / `dcPin` 33.
+  Add them when a classic board actually ships parallel output as its default, rather than
+  speculatively across the other 16 classic boards, none of which has been tested this way.
 
-  **Next step:** call `esp_lcd_new_i80_bus` from a bare IDF example on the same chip and IDF pin. If
-  that hangs too it is upstream and belongs in an IDF issue; if it returns, the difference is in our
-  bus config. Until then classic-ESP32 boards use RmtLedDriver, and `ParallelLedDriver` stays
-  registered and selectable rather than compiled out: hiding it would remove the one path anyone can
-  retest with, and the driver is correct on every LCD_CAM chip.
+- **Classic-ESP32 I2S instance split: LEDs on 1, audio on 0** (2026-09-06, SHIPPED, kept as the
+  rationale). The classic ESP32's parallel LED bus IS an I2S peripheral, so it contends with the
+  audio input, and the 2026-09-03 "hangs in `esp_lcd_new_i80_bus`" entry is closed: that was a pin
+  fault (the ESP32-PICO-V3-02 has no GPIO 18/23, which were the WR/DC defaults), not contention.
+  The split is fixed in silicon rather than chosen: instance 0 alone carries the PDM converters
+  (`I2S_LL_PDM2PCM_SUPPORTED_PORT_MASK` is `1U << 0`), and NOTHING on this chip requires instance
+  1, so the LED bus is the one consumer that can always yield. It therefore takes 1 unconditionally
+  and audio takes 0, which removes the boot race entirely, leaves 0 for every audio source (PDM,
+  standard I2S, line-in ADC, codec), and costs nothing. `esp_lcd` picks the first FREE instance
+  rather than taking one by number, so 1 is claimed by holding 0 across bus creation. For contrast,
+  hpwit's I2SClocklessLedDriver hard-codes `I2S_DEVICE 0` and would take the PDM instance instead.
+  Both sides also retry once a second while they want a busy instance, so the loser of any
+  contention recovers without the user touching a control.
 
-  LCD-MM cannot substitute here. It is `lcdLanes`-only by design (MoonLedDriver.h,
-  `lanesAvailable`) because the classic ESP32's i80 IS the I2S peripheral, which that backend does
-  not implement, so a chip without LCD_CAM has no second parallel route.
+- **Bench-verified classic parallel setups, not yet in the catalog** (2026-09-06). Every classic
+  board in `deviceModels.json` ships `RmtLedDriver`, so none carries a `ParallelLedDriver` entry,
+  and the driver's defaults (`clockPin` unset, `dcPin` 33) work on a classic board without one.
+  Two setups are proven on hardware and worth recording before they are lost: the **Olimex
+  ESP32-Gateway** drives 64 lights on GPIO 16 with `clockPin` 32 / `dcPin` 4, and its free pins are
+  scarce enough that a catalog entry should pin them explicitly rather than inherit a default (its
+  Ethernet PHY holds 18/23 as MDIO/MDC and 5 as reset, all of which the old defaults collided
+  with); the **QuinLED Dig-Next-2** drives 256 lights on GPIO 2 with `clockPin` unset / `dcPin` 33.
+  Add them when a classic board actually ships parallel output as its default, rather than
+  speculatively across the other 16 classic boards, none of which has been tested this way.
+
+- **Classic-ESP32 parallel LEDs and a PDM microphone are exclusive** (2026-09-06). The
+  2026-09-03 "hangs in `esp_lcd_new_i80_bus`" entry is closed: the QuinLED Dig-Next-2 carries an
+  ESP32-PICO-V3-02, whose package has no GPIO 18/23 (its pads serve the in-package flash and PSRAM),
+  and the classic WR/DC defaults were exactly 18/23. The driver now refuses a pin the package lacks
+  and defaults both lines to unset (sunk onto input-only pads). What remains: IDF's LCD mode exists
+  on I2S0 only, and `esp_lcd` falls through to I2S1 when I2S0 is taken, which wedges the chip the
+  same silent way. A PDM microphone is also I2S0-only in hardware, so the platform refuses the bus
+  with a named status when I2S0 is held. Two follow-ups: report the I2S1 fallthrough upstream (it
+  should return an error), and note that the raw-I2S classic driver above (the ring, on I2S1 as
+  hpwit's driver runs) is what lets the two coexist, on top of lifting the 2048-light cap. A
+  standard I2S microphone (INMP441) is content on I2S1 and coexists today when the LED bus claims
+  I2S0 first.
 
 (The shared lane-driver scaffolding extraction — when a 3rd parallel backend lands — is tracked separately under [§ Extract shared lane-driver scaffolding](#extract-shared-lane-driver-scaffolding-when-the-3rd-parallel-backend-lands-deferred) above.)

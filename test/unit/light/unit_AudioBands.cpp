@@ -440,3 +440,45 @@ TEST_CASE("a room below the floor reads silent, however hard the learner is aske
     c.process(music, out, 23, 60.0f, 40.0f, 20, 40.0f, true, 60.0f);
     for (uint8_t b = 0; b < 16; b++) CHECK(out[b] > 0.0f);
 }
+
+// Flux is a difference against the PREVIOUS block and the onset detector carries a running mean,
+// so a source that stops and starts must not measure its first new block against the last block of
+// the old one: that reports a hit nobody played. AudioService::deinit clears both with the frame.
+TEST_CASE("a restarted source reports no onset from the block that preceded it") {
+    // The history the old source left behind: a loud spectrum.
+    uint8_t prev[16], now[16];
+    for (uint8_t b = 0; b < 16; b++) { prev[b] = 200; now[b] = 200; }
+    CHECK(mm::spectralFlux(prev, now) == 0);            // steady: no flux, by definition
+
+    // Cleared history (what deinit leaves) reads the same block as a full-scale RISE, which is why
+    // deinit also publishes a silent frame: the first block after a restart is what that silences.
+    // What clearing buys is a DEFINED reference for the block after it, rather than a spectrum the
+    // old source left behind.
+    uint8_t cleared[16] = {};
+    const uint16_t againstStale = mm::spectralFlux(prev, now);
+    const uint16_t againstCleared = mm::spectralFlux(cleared, now);
+    CHECK(againstStale == 0);
+    CHECK(againstCleared > againstStale);   // which is why the frame is published silent too
+}
+
+// The gate that ships, exercised through magnitudesToBands rather than process() directly: every
+// conditioner test above hands `process` a hand-picked gateDb, so none covers the value the caller
+// actually passes. It sits AT the display window's floor, deliberately: a band reports its bins'
+// PEAK while the level path reports an RMS, so the level's 20 dB silence margin is a far larger
+// concession here. Measured on a Dig-Next-2, a 20 dB margin took a quiet room from flux 1-2 to
+// 49-102 with onsets firing.
+TEST_CASE("a room below the display window shows nothing on the spectrum") {
+    const size_t nMag = 256;
+    const uint32_t rate = 22050;
+    float room[nMag];
+    // 100 dB: below the window floor (110 dB at `floor` 100), above where a 20 dB margin would sit.
+    for (size_t i = 0; i < nMag; i++) room[i] = 100000.0f;
+
+    mm::BandConditioner cond;
+    uint8_t bands[16]; uint16_t peakHz = 0, peakMag = 0;
+    for (int i = 0; i < 20; i++)
+        mm::magnitudesToBands(room, nMag, rate, /*noiseFloor*/ 100, /*gain*/ 128,
+                              bands, peakHz, peakMag, &cond, 23, 4, 24.0f, true);
+
+    for (uint8_t b = 0; b < 16; b++) CHECK(bands[b] == 0);
+}

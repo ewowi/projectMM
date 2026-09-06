@@ -16,6 +16,8 @@
 #include "esp_adc/adc_oneshot.h"  // adcRead: the ADC1 oneshot unit
 #include "esp_adc/adc_cali.h"      // adcReadMv: per-chip eFuse correction
 #include "esp_adc/adc_cali_scheme.h"
+#include "esp_efuse.h"        // esp_efuse_get_pkg_ver: the classic ESP32's PACKAGE decides its pin table
+#include "soc/efuse_defs.h"   // EFUSE_RD_CHIP_VER_PKG_*: the package ids
 #include "esp_heap_caps.h"    // heap_caps_get_total_size(MALLOC_CAP_SPIRAM) — detect PSRAM without a new
                               // component dep (the heap component is always linked; esp_psram is not,
                               // and adding it to REQUIRES would switch main to strict mode, hiding the
@@ -45,10 +47,27 @@ bool inList(uint8_t gpio, const uint8_t* list, size_t n) {
 // when esp_psram_is_initialized() is true at runtime. A plain WROOM (e.g. the Olimex ESP32-Gateway) has
 // no PSRAM, so its 16/17 stay free — flagging them would be a false positive.
 #if defined(CONFIG_IDF_TARGET_ESP32)
-// Classic ESP32: flash 6-11 always; 16/17 are the extra flash/PSRAM bus on WROVER modules only.
+// Classic ESP32 in a plain module (WROOM / WROVER, a D0WD die): flash 6-11 always; 16/17 are the
+// extra flash/PSRAM bus on WROVER modules only.
 constexpr uint8_t kReserved[]        = {6, 7, 8, 9, 10, 11};
 constexpr uint8_t kReservedIfPsram[] = {16, 17};
 constexpr uint8_t kStrap[]           = {0, 2, 5, 12, 15};
+// The PICO system-in-package parts wire their in-package flash and PSRAM differently, and the SAME
+// esp32 firmware runs on all of them, so the package is read from eFuse at runtime rather than from
+// the build. ESP32-PICO-V3-02 (the QuinLED Dig-Next-2): flash on 6/11, PSRAM on 9/10, and the pads
+// of GPIO 16/17/18/23 are NC on the package (datasheet Table 7), which in practice means "used by
+// the in-package parts": muxing a peripheral onto one wedges the flash cache, and the board resets
+// with no panic and no coredump. 7/8 ARE free on this package (the Dig-Next-2's microphone sits
+// there). ESP32-PICO-D4: flash on 6-11 plus 16/17, PSRAM or not.
+constexpr uint8_t kReservedPicoV302[] = {6, 9, 10, 11};
+constexpr uint8_t kAbsentPicoV302[]   = {16, 17, 18, 23};
+constexpr uint8_t kReservedPicoD4[]   = {6, 7, 8, 9, 10, 11, 16, 17};
+
+/// The eFuse package id, read once (it cannot change after boot).
+uint32_t packageId() {
+    static const uint32_t pkg = esp_efuse_get_pkg_ver();
+    return pkg;
+}
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
 // ESP32-S3: flash 26-32 always; 33-37 are octal-PSRAM's SPIIO4-7 + DQS, reserved only on an octal-PSRAM
 // module (N16R8/R8). Straps 0,45,46 (GPIO3 is a soft strap). JTAG/UART0/USB are role-conflicts, not
@@ -93,6 +112,20 @@ GpioCapability gpioCapability(uint8_t gpio) {
     c.strap         = inList(gpio, kStrap, sizeof(kStrap));
     c.reserved      = inList(gpio, kReserved, sizeof(kReserved)) ||
                       (psramPresent() && inList(gpio, kReservedIfPsram, sizeof(kReservedIfPsram)));
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    // The die's valid-GPIO mask does not know the package; the tables above do (see their note).
+    switch (packageId()) {
+    case EFUSE_RD_CHIP_VER_PKG_ESP32PICOV302:
+        c.reserved  = inList(gpio, kReservedPicoV302, sizeof(kReservedPicoV302));
+        c.validGpio = c.validGpio && !inList(gpio, kAbsentPicoV302, sizeof(kAbsentPicoV302));
+        break;
+    case EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4:
+        c.reserved  = inList(gpio, kReservedPicoD4, sizeof(kReservedPicoD4));
+        break;
+    default:
+        break;
+    }
+#endif
     return c;
 }
 

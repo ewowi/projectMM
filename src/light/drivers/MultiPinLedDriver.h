@@ -70,37 +70,37 @@ public:
     ///  - In shift mode this pin is wired to the physical '595 clock line on the expander board.
     ///    Changing it means re-wiring hardware, not just re-configuring.
     ///
-    /// **Give it a real, free GPIO — do not set -1.** Bench-proven that nothing on a WS2812 strand reads
-    /// WR or DC (4096 lights over 16 lanes, and 1440 through a '595, both render with both pins at -1:
-    /// the peripheral generates the signals internally and the GPIO matrix only carries them off-chip).
-    /// But -1 does not MEAN "unrouted" here — it means **65535**: the value reaches the platform as
-    /// `uint16_t`, which slips past IDF's `wr_gpio_num >= 0 && dc_gpio_num >= 0` check
-    /// (esp_lcd_panel_io_i80.c), where a properly-typed `GPIO_NUM_NC` would be rejected outright.
-    /// `esp_lcd` then hands 65535 to `esp_rom_gpio_connect_out_signal`, and what happens next is PER-TARGET
-    /// ROM, not an API contract: the S3 and classic ROMs open with an unsigned bounds compare and return
-    /// without writing (a silent no-op), but the **ESP32-P4 ROM has no such guard** and computes a store
-    /// ~0x50120554 — a quarter-megabyte past the GPIO block, in another peripheral's window — plus a
-    /// >31-bit shift. This backend runs on the P4. IDF's own `esp_rom/patches/esp_rom_gpio.c` is unguarded
-    /// too, so the S3's check is an implementation detail a patch could remove, not a promise. FastLED's
-    /// LCD_CAM driver parks both pins on a dummy GPIO for the same reason. To spend no GPIO at all, use
-    /// MoonI80Peripheral: owning the DMA below esp_lcd, it holds DC at a constant level and routes WR only
-    /// when a '595 needs it as SRCLK.
-    /// Per-chip, because 10/11 are free GPIOs on the S3 these were chosen on and are the FLASH bus
-    /// on a classic ESP32 (6-11): routing the i80 clock onto one wedges the board to a watchdog
-    /// reset with no panic and no coredump. `i2sLanes > 0` IS "this is the classic-ESP32 i80" (the
-    /// two backends are mutually exclusive per silicon), the same discriminator dmaBudgetBytes()
-    /// below keys on, rather than a raw CONFIG_IDF_TARGET that would put chip knowledge outside the
-    /// platform layer.
+    /// **Unset (-1) means "no pin", and what that costs depends on the chip.** Nothing on a WS2812
+    /// strand reads WR or DC (bench-proven: 4096 lights over 16 lanes and 1440 through a '595 both
+    /// render with neither line wired), so the only question is what the peripheral is given for
+    /// the GPIO number it insists on.
     ///
-    /// 18/23 rather than the first free numbers: WR and DC are peripheral-fixed signals no WS2812
-    /// strand reads, so this default only has to avoid pins a BOARD is likely to have committed.
-    /// 21/22 look free chip-wise and are the QuinLED Dig-Next-2's relay lines, where claiming them
-    /// silently switched two power channels off (LEDs dark, no error anywhere). 18/23 are plain
-    /// GPIOs on every classic package: no strap, no flash, no UART, and unused by the catalog's
-    /// boards. A board that does wire them overrides the control, and reinit() refuses a reserved
-    /// pin outright.
-    int8_t clockPin = platform::i2sLanes > 0 ? 18 : 10;
-    int8_t dcPin    = platform::i2sLanes > 0 ? 23 : 11;
+    /// **Naming.** WR and DC are the i8080 bus's own signal names (WR = the write strobe that
+    /// clocks each bus word, DC = the data/command select), which is what the datasheets and
+    /// `esp_lcd` call them; `clockPin`/`dcPin` are the control names a user sees. Every message
+    /// about them names both, as "clockPin (WR)" and "dcPin (DC)", so the UI and the datasheet
+    /// can be read together.
+    ///
+    /// **WR can be unset on the classic ESP32; DC cannot, anywhere.** WR reaches its pad through the
+    /// GPIO matrix, so the platform sinks an unset one onto an input-only pad and no usable GPIO is
+    /// spent. DC is toggled in SOFTWARE by esp_lcd on every transfer, and that call on a pad with no
+    /// output driver logs an error from a context where logging aborts, so DC always needs a real
+    /// pin: 33 on the classic (free on every package here), 11 on the LCD_CAM chips. On the LCD_CAM
+    /// chips (S3/P4/S31) both need a real pad,
+    /// because an invalid number reaches the ROM's matrix routine and the P4's writes a quarter
+    /// megabyte past the GPIO block (the S3 happens to ignore it, which is luck, not a contract);
+    /// there the default is 10/11, free on the S3 these were chosen on, and MoonI80Peripheral is
+    /// the way to spend no GPIO at all (owning the DMA below esp_lcd, it holds DC constant and
+    /// routes WR only when a '595 needs it as SRCLK).
+    ///
+    /// A board that needs WR on a real pin (a '595's shift clock) sets it; the platform refuses a
+    /// pin its package lacks or has wired to flash or PSRAM before the peripheral can touch it.
+    /// That refusal is what turned the QuinLED Dig-Next-2's old default of 18/23 from a silent
+    /// watchdog reset (the ESP32-PICO-V3-02 has no such pads) into a status naming the pin.
+    /// `i2sLanes > 0` IS "this is the classic-ESP32 i80" (the two backends are mutually exclusive
+    /// per silicon), the same discriminator dmaBudgetBytes() below keys on.
+    int8_t clockPin = platform::i2sLanes > 0 ? -1 : 10;
+    int8_t dcPin    = platform::i2sLanes > 0 ? 33 : 11;
 
     // --- LedPeripheral descriptors ---
 
@@ -143,8 +143,19 @@ public:
         if constexpr (platform::i2sLanes > 0) return LedHwBlock::I2s;
         else return LedHwBlock::LcdCam;
     }
+    /// The classic ESP32's i80 IS an I2S peripheral, and this bus always drives from instance 1,
+    /// leaving instance 0 (the only one with a PDM converter) for audio. Ask the platform whether
+    /// instance 1 is free now; on the LCD_CAM chips nothing is shared and this is a compile-time
+    /// false.
+    bool busContentionCleared() const override {
+        if constexpr (platform::i2sLanes > 0) return platform::i80Ws2812SharedBusFree();
+        else return false;
+    }
+
     const char* initFailMsg() const override {
-        // Names the same peripheral the label does, so the error and the dropdown agree.
+        // The backend's own reason when it has one (a peripheral another module holds); else the
+        // generic line, naming the same peripheral the label does so the error and dropdown agree.
+        if (const char* why = platform::i80Ws2812LastError()) return why;
         return (platform::i2sLanes > 0) ? "I2S-IDF: bus init failed, check pins / memory"
                                        : "LCD-IDF: bus init failed, check pins / memory";
     }
@@ -153,7 +164,9 @@ public:
     /// WR: the peripheral already drives it and the board already wires it, so the lane is inert.
     /// (Overrides the interface default; this is the "ghost pin" the platform layer uses for the same
     /// reason.)
-    uint16_t clockPinForBus() const override { return static_cast<uint16_t>(clockPin); }
+    uint16_t clockPinForBus() const override {
+        return clockPin < 0 ? platform::kBusPinUnset : static_cast<uint16_t>(clockPin);
+    }
 
     /// Bind the i80-specific bus controls: the sacrificial WR (clockPin) and DC pins
     /// the peripheral mandates.
@@ -171,23 +184,33 @@ public:
     /// distinct control lines — the bus won't init), so it can't be a warn-and-run like a data-lane
     /// collision (which only corrupts that one lane). null = no fatal condition.
     const char* validateBusFatal() const override {
-        // An UNSET clockPin/dcPin (-1) is fatal on i80: the bus mandates a valid WR and DC GPIO, but
-        // clockPinForBus()/busInit cast the int8_t to uint16_t, so -1 becomes 65535 and slips past
-        // IDF's own `wr_gpio_num >= 0 && dc_gpio_num >= 0` guard (see the clockPin doc above). Reject it
-        // here, before that cast, so an unconfigured board idles with a clear status instead of an
-        // init on a garbage GPIO number.
-        if (clockPin < 0) return "clockPin (WR) is unset — the i80 bus needs a valid WR GPIO";
-        if (dcPin < 0) return "dcPin is unset — the i80 bus needs a valid DC GPIO";
-        if (clockPin == dcPin)
-            return "clockPin (WR) and dcPin are the same GPIO — they must differ";
-        // Neither may sit on a pin the chip wired to flash or PSRAM: routing I/O there corrupts the
-        // device. The driver's own sweep covers the bus LANES, but WR only rides that list when
-        // there are spare lanes to park it on (a full-width 8- or 16-pin setup has none) and DC
-        // never does, so these two are checked here, where the pair already lives.
-        if (platform::gpioCapability(static_cast<uint8_t>(clockPin)).reserved)
-            return "clockPin (WR) is wired to flash/PSRAM on this chip - pick another pin";
-        if (platform::gpioCapability(static_cast<uint8_t>(dcPin)).reserved)
-            return "dcPin is wired to flash/PSRAM on this chip - pick another pin";
+        // Unset (-1) is fine on the classic ESP32, where the platform sinks the line onto an
+        // input-only pad (see the clockPin doc), and fatal on the LCD_CAM chips, where the number
+        // would reach the ROM. The int8 -> uint16 cast in busInit is exactly why this is checked
+        // here: an unguarded -1 becomes 65535 and slips IDF's own `>= 0` test.
+        // WR may be unset on the classic ESP32 (the platform sinks it onto an input-only pad, which
+        // the GPIO matrix drives harmlessly); DC may never be, on any chip, because esp_lcd toggles
+        // it in software every frame and that call aborts on a pad with no output driver.
+        if (platform::i2sLanes == 0 && clockPin < 0)
+            return "clockPin (WR) is unset - the i80 bus needs a write-strobe GPIO on this chip";
+        if (dcPin < 0) return "dcPin (DC) is unset - the i80 bus toggles it every frame, so it needs a real GPIO";
+        if (clockPin >= 0 && clockPin == dcPin)
+            return "clockPin (WR) and dcPin (DC) are the same GPIO - they must differ";
+        // Neither may sit on a pin the chip wired to flash or PSRAM, nor on one this PACKAGE does
+        // not have: routing a signal there corrupts the device or wedges its flash cache, and
+        // both fail silently. The driver's own sweep covers the bus LANES, but WR only rides that
+        // list when there are spare lanes to park it on and DC never does, so the pair is checked
+        // here, where it lives.
+        if (clockPin >= 0) {
+            const auto cap = platform::gpioCapability(static_cast<uint8_t>(clockPin));
+            if (!cap.validGpio) return "clockPin (WR) does not exist on this chip package - pick another pin";
+            if (cap.reserved)   return "clockPin (WR) is wired to flash/PSRAM on this chip - pick another pin";
+        }
+        if (dcPin >= 0) {
+            const auto cap = platform::gpioCapability(static_cast<uint8_t>(dcPin));
+            if (!cap.validGpio) return "dcPin (DC) does not exist on this chip package - pick another pin";
+            if (cap.reserved)   return "dcPin (DC) is wired to flash/PSRAM on this chip - pick another pin";
+        }
         // The '595 latch is a BUS LANE, so it needs its own GPIO: sharing it with WR would make the
         // pixel clock double as the latch (the '595 would present a byte on every shift cycle), and
         // sharing it with DC would latch on the command phase. Both are fatal — the bus builds, but
@@ -197,7 +220,7 @@ public:
             if (owner_->latchPin == clockPin)
                 return "latchPin is on clockPin (WR) — the latch needs its own GPIO";
             if (owner_->latchPin == dcPin)
-                return "latchPin is on dcPin — the latch needs its own GPIO";
+                return "latchPin is on dcPin (DC) - the latch needs its own GPIO";
         }
         return nullptr;
     }
@@ -246,9 +269,9 @@ public:
     /// slot keeps its wire duration.
     bool busInit(size_t frameBytes, bool wantSecondBuffer) override {
         return platform::i80Ws2812Init(i80_, owner_->busPinList(), owner_->busPinCount(),
-                                       static_cast<uint16_t>(clockPin),
-                                       static_cast<uint16_t>(dcPin), frameBytes, wantSecondBuffer,
-                                       owner_->busClockMultiplier());
+                                       clockPinForBus(),
+                                       dcPin < 0 ? platform::kBusPinUnset : static_cast<uint16_t>(dcPin),
+                                       frameBytes, wantSecondBuffer, owner_->busClockMultiplier());
     }
     /// DMA buffer `i` (0/1) the orchestrator encodes into; buffer 1 is null when the second
     /// buffer didn't fit (single-buffer mode). Both are the same size (busCapacity).

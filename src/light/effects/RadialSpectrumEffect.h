@@ -97,9 +97,14 @@ public:
         // a tight halo around the center, the high end reaches the corner of a large wall.
         // (An earlier range started at 50% per ring, which died after 19 rings at ANY setting, so
         // the effect could never fill a panel however far the control was pushed.)
-        const uint32_t keep = 236u + (static_cast<uint32_t>(persistence) * 19u) / 255u;
-        uint32_t k = 256;
-        for (uint16_t r = 0; r < kMaxHistory; r++) { fade_[r] = static_cast<uint8_t>(k > 255 ? 255 : k); k = (k * keep) >> 8; }
+        // Rebuilt only when `persistence` moves: the table depends on nothing else, and at 128
+        // entries per frame it was the effect's largest fixed cost after the light loop itself.
+        if (persistence != fadeFor_) {
+            const uint32_t keep = 236u + (static_cast<uint32_t>(persistence) * 19u) / 255u;
+            uint32_t k = 256;
+            for (uint16_t r = 0; r < kMaxHistory; r++) { fade_[r] = static_cast<uint8_t>(k > 255 ? 255 : k); k = (k * keep) >> 8; }
+            fadeFor_ = persistence;
+        }
 
         const bool table = lut_.ready();
         const int32_t cx = w / 2, cy = h / 2, cz = dep / 2;
@@ -142,7 +147,8 @@ private:
     PolarLut lut_{*this};
     uint8_t  history_[kMaxHistory][16] = {};   ///< the rings: one band frame per step
     uint8_t  beats_[kMaxHistory] = {};         ///< the shockwave strength born with each ring
-    uint8_t  fade_[kMaxHistory] = {};          ///< the keep fraction per ring of age, this frame
+    uint8_t  fade_[kMaxHistory] = {};           ///< the keep fraction per ring of age
+    uint8_t  fadeFor_ = 255;                    ///< the `persistence` fade_[] was built for
     uint16_t head_ = 0;                         ///< the newest ring
     uint32_t carry_ = 0;                        ///< time owed toward the next ring, in ms
     uint8_t  pendingBeat_ = 0;                  ///< a hit waiting for the next ring

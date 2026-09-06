@@ -24,18 +24,14 @@ projectMM ships **no migration code**: the persistence layer is robust by defaul
 
 ## Unreleased (`next-iteration`)
 
-### Audio: automatic levels tune with one control, and `strength` / `maxBoost` are gone
+### Audio: `floor` is now the silence threshold in both level modes
 
 **Action: re-set `floor` on a device whose microphone you had tuned.**
 Affects any device running the Audio module with a local microphone or line-in.
 
-`levels = automatic` exposed four sliders (`floor`, `gain`, `strength`, `maxBoost`) for what is one
-decision. Two of them are now constants and the mode is tuned with `floor` alone.
-
-`strength` and `maxBoost` acted on the learner's per-band range, which the conditioner has already
-normalized per rig, so one value serves every source: a PDM microphone, an INMP441 and a line-in all
-look the same by the time they reach it. They are fixed at the values that measured best on the
-bench (4 and 24 dB). Persisted keys for both are ignored on load, so nothing has to be cleaned up.
+`levels = automatic` is tuned with `floor` alone: how hard the learner levels, and how far it may
+lift a band, are constants rather than controls, because both act on a per-band range the
+conditioner has already normalized per rig, so one value serves every source.
 
 `floor` is what changes meaning, and why re-setting it is worth a minute. It is now the **silence
 threshold** in both modes: below it a band reads zero and the learner does not learn from it. That

@@ -75,6 +75,9 @@ public:
         yProf_.resize(static_cast<size_t>(height()));
         if (plane_)   std::memset(plane_.data(), 0, plane_.bytes());
         if (scratch_) std::memset(scratch_.data(), 0, scratch_.bytes());
+        // The dither accumulator too: resize KEEPS the old contents at an unchanged size, so a
+        // re-prepare would carry the previous configuration's error into the first frames.
+        if (carry_)   std::memset(carry_.data(), 0, carry_.bytes());
         started_ = false;
         front_ = true;
     }

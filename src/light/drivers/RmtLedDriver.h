@@ -251,6 +251,11 @@ public:
         if (txInFlight_) {
             for (uint8_t attempt = 0; attempt < 4 && txInFlight_; attempt++)
                 txInFlight_ = !waitForPins();
+            // Still busy after every attempt: the peripheral is reading symbols_ right now, so
+            // rebuilding would free the buffer under it, which is the corruption this drain exists
+            // to prevent. Defer instead. tick() re-waits and the config applies on a later prepare;
+            // the alternative, rebuilding anyway, trades a delayed config change for a torn frame.
+            if (txInFlight_) return;
         }
         parseConfig();
         resizeSymbols();

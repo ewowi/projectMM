@@ -569,6 +569,14 @@ public:
     }
 
     void tick1s() MM_NONBLOCKING override {
+        // The mirror of the LED driver's retry: on the classic ESP32 a PDM microphone and the
+        // parallel LED bus both need I2S0, so whichever asks second is refused, and the loser would
+        // otherwise stay silent until the user edited a control. Retry only while Local mode is
+        // wanted and the mic is not up, and only once the platform says the instance is free, so a
+        // genuinely bad pin set costs nothing per second. reinit() is the cold path prepare() runs.
+        if (mode == 0 && !inited_
+            && platform::audioMicSharedBusFree(micMode == 1 ? platform::MicMode::Pdm
+                                                            : platform::MicMode::I2sStd)) reinit();
         std::snprintf(levelStr_, sizeof(levelStr_), "%u", static_cast<unsigned>(levelPeak_));
         std::snprintf(onsetStr_, sizeof(onsetStr_), "%u/s, flux %u",
                       static_cast<unsigned>(onsetCount_), static_cast<unsigned>(fluxPeak_));
@@ -782,6 +790,13 @@ private:
         // and then lost its bus (a failed reinit after a pin edit, or release)
         // would leave the last real frame frozen on the LEDs instead of going dark.
         frame_ = AudioFrame{};
+        // The ANALYSIS history goes with it, so a restarted source begins from a DEFINED state
+        // rather than the old source's last block: flux is a difference against the previous
+        // block, and the onset detector carries a running mean. The zeroed frame above is what
+        // keeps the first block after a restart silent (measured against zeros it would otherwise
+        // read as a full-scale rise), and this is what keeps the second one honest.
+        std::memset(prevBands_, 0, sizeof(prevBands_));
+        onset_ = OnsetDetector{};
     }
 
     // --- WLED audio sync (guarded: only compiled where platform::hasNetwork) ---

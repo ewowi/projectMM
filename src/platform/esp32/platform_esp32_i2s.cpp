@@ -22,7 +22,8 @@
 
 #include "driver/i2s_std.h"
 #if SOC_I2S_SUPPORTS_PDM_RX
-#include "driver/i2s_pdm.h"   // the two-wire onboard mics (QuinLED Dig-Next-2 and friends)
+#include "driver/i2s_pdm.h"          // the two-wire onboard mics (QuinLED Dig-Next-2 and friends)
+#include "esp_private/i2s_platform.h" // the shared-instance probe (see audioMicSharedBusFree)
 #endif
 #include "esp_heap_caps.h"   // heap_caps_malloc — the FFT scratch, internal RAM only
 #include "esp_log.h"
@@ -87,13 +88,23 @@ bool ensureFftInit() {
 
 }  // namespace
 
+namespace {
+// Set when audioMicInit failed because another module held the I2S instance, cleared on every
+// attempt. Only contention can clear on its own, so only it earns the once-a-second retry: keyed
+// on "the mic is down" instead, a board with no microphone wired would re-init forever.
+bool s_micRefusedForContention = false;
+}
+
 bool audioMicInit(AudioMicHandle& h, uint16_t wsPin, uint16_t sdPin,
                   uint16_t sckPin, int16_t mclkPin, uint32_t sampleRate, MicMode mode) {
+    s_micRefusedForContention = false;
     auto* st = new (std::nothrow) MicState();
     if (!st) return false;
 
     i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     if (i2s_new_channel(&chanCfg, nullptr, &st->rx) != ESP_OK) {
+        // No free instance: something else (the parallel LED bus) holds it, and that can clear.
+        s_micRefusedForContention = true;
         delete st;
         return false;
     }
@@ -222,6 +233,25 @@ size_t audioMicRead(AudioMicHandle& h, int32_t* out, size_t maxSamples) {
     return bytesRead / sizeof(int32_t);
 }
 
+bool audioMicSharedBusFree(MicMode mode) {
+#if CONFIG_IDF_TARGET_ESP32
+    // Only after a CONTENTION refusal. Without this the probe answers "free" on any board whose
+    // instance 0 is simply idle, so a mic that is down for its OWN reasons (no part wired, wrong
+    // pins) would re-init once a second forever, allocating and logging on the render thread.
+    if (!s_micRefusedForContention) return false;
+    // Only the classic ESP32 shares: its parallel LED bus IS an I2S peripheral. That bus always
+    // takes instance 1 (see platform_esp32_i80.cpp), so audio always has instance 0, which is also
+    // the only instance a PDM microphone can use. This is the mirror of the bus's own probe: it
+    // matters when something else holds 0, and the mic recovers once that clears.
+    (void)mode;
+    if (i2s_platform_acquire_occupation(I2S_CTLR_HP, 0, "mm_mic_probe") != ESP_OK) return false;
+    i2s_platform_release_occupation(I2S_CTLR_HP, 0);
+    return true;
+#else
+    return false;   // every other chip drives parallel LEDs from LCD_CAM, so nothing contends
+#endif
+}
+
 void audioMicDeinit(AudioMicHandle& h) {
     auto* st = static_cast<MicState*>(h.impl);
     if (!st) return;
@@ -265,6 +295,7 @@ bool audioMicInit(AudioMicHandle&, uint16_t, uint16_t, uint16_t, int16_t, uint32
 }
 size_t audioMicRead(AudioMicHandle&, int32_t*, size_t) { return 0; }
 void audioMicDeinit(AudioMicHandle&) {}
+bool audioMicSharedBusFree(MicMode) { return false; }   // no I2S: nothing to contend for
 void audioFft(const float*, size_t, float*) {}
 
 

@@ -1160,13 +1160,13 @@ Each band drives a damped harmonic oscillator integrated per frame, with the bas
 - `peakHold`: how long the peak marker stays up, as a half-life.
 - `smooth`: drive from the meter ballistic rather than the raw band. Raw is the truer instrument here, since the needle has its own ballistics already.
 
-Origin: projectMM original, on the VU ballistics of IEC 60268-17 and the onset detector
+Origin: projectMM original, on the VU ballistics of IEC 60268-17
 
 <a id="radialspectrum"></a>
 
 ### RadialSpectrum 💫🎶🖌️🎡 · 3D
 
-The spectrum as ripples. Each band owns a sector around the center, mirrored left and right with the bass at the top and bottom; sound is born at the center and travels outward, so the radius is time and a ring's length is that band's recent history. It is the circular visualizer the music-video world settled on, a radial spectrogram, and it is also the diagnostic a bar analyser is: every sector is one band, so a band that is stuck or pinned shows as a sector that never moves or never dims. On a cube, under the spherical mapping, the ripples are expanding shells.
+The spectrum as ripples. Each band owns a sector around the center, mirrored left and right with the bass at the top and bottom; sound is born at the center and travels outward, so the radius is time and a ring's length is that band's recent history. It is the circular visualizer the music-video world settled on, a radial spectrogram, and it is also the diagnostic a bar analyzer is: every sector is one band, so a band that is stuck or pinned shows as a sector that never moves or never dims. On a cube, under the spherical mapping, the ripples are expanding shells.
 
 Nothing is transported. The effect keeps a short history of band frames and every light reads it, its angle choosing the band and its radius the age: a table read per light, cheaper than drawing bars.
 

@@ -45,6 +45,9 @@
 #include <cstring>
 #include <functional>  // the transmit callback passed to the shared frame loopback
 #include <new>      // std::nothrow
+#if !SOC_LCDCAM_I80_LCD_SUPPORTED
+#include "esp_private/i2s_platform.h"   // the I2S0 occupancy probe (the same API esp_lcd's I2S backend uses)
+#endif
 
 namespace mm::platform {
 
@@ -353,10 +356,87 @@ I80State* createState(const uint16_t* dataPins, uint8_t laneCount,
 
 } // namespace
 
-bool i80Ws2812Init(I80Ws2812Handle& h, const uint16_t* dataPins, uint8_t laneCount,
+namespace {
+const char* s_lastError = nullptr;   // set by i80Ws2812Init on a refusal it can name; cold path
+// Whether that refusal was CONTENTION (another module holds the instance) rather than a config
+// fault. Only contention can clear on its own, so only it earns a retry: keying the retry on
+// `s_lastError` alone made a bad pin set rebuild the bus once a second forever.
+bool s_refusedForContention = false;
+}
+
+const char* i80Ws2812LastError() { return s_lastError; }
+
+bool i80Ws2812SharedBusFree() {
+#if !SOC_LCDCAM_I80_LCD_SUPPORTED
+    // Only meaningful after THIS backend was refused for contention: otherwise a driver that failed
+    // for its own reasons (bad pins, no memory) would rebuild once a second forever. Probing is the
+    // acquire/release pair esp_lcd itself uses, which is why it is safe to call repeatedly.
+    if (!s_refusedForContention) return false;
+    if (i2s_platform_acquire_occupation(I2S_CTLR_HP, 1, "mm_i80_probe") != ESP_OK) return false;
+    i2s_platform_release_occupation(I2S_CTLR_HP, 1);
+    return true;
+#else
+    return false;   // LCD_CAM: the i80 bus shares nothing
+#endif
+}
+
+bool i80Ws2812Init(I80Ws2812Handle& h, const uint16_t* dataPinsIn, uint8_t laneCount,
                    uint16_t wrGpio, uint16_t dcGpio, size_t bufferBytes,
                    bool wantSecondBuffer, uint8_t clockMultiplier) {
-    if (!dataPins || laneCount == 0 || bufferBytes == 0 || clockMultiplier == 0) return false;
+    s_lastError = nullptr;
+    s_refusedForContention = false;
+    if (!dataPinsIn || laneCount == 0 || bufferBytes == 0 || clockMultiplier == 0) return false;
+    if (laneCount > ESP_LCD_I80_BUS_WIDTH_MAX) return false;
+    uint16_t dataPins[ESP_LCD_I80_BUS_WIDTH_MAX];
+    std::memcpy(dataPins, dataPinsIn, laneCount * sizeof(uint16_t));
+#if !SOC_LCDCAM_I80_LCD_SUPPORTED
+    // The classic ESP32's i80 IS an I2S peripheral, and the chip has two instances. **The LED bus
+    // always takes instance 1, and everything else gets 0.** The split is fixed in silicon rather
+    // than chosen: instance 0 is the only one with the PDM-to-PCM and PCM-to-PDM converters
+    // (I2S_LL_PDM2PCM_SUPPORTED_PORT_MASK is 1U << 0), so a PDM microphone can ONLY live there,
+    // while nothing in the chip requires instance 1 for anything. The LED bus is therefore the one
+    // consumer that can always yield, and hard-coding it to 1 leaves 0 free for every audio source
+    // (PDM, standard I2S, line-in ADC, codec), with no ordering or boot race to reason about.
+    //
+    // esp_lcd picks the first FREE instance rather than taking one by number, so 1 is claimed by
+    // holding 0 across bus creation and releasing it straight after.
+    if (i2s_platform_acquire_occupation(I2S_CTLR_HP, 1, "mm_i80_probe") != ESP_OK) {
+        s_lastError = "I2S1 is in use: on the classic ESP32 the parallel LED bus is an I2S "
+                      "peripheral, and it drives from instance 1";
+        s_refusedForContention = true;
+        return false;
+    }
+    i2s_platform_release_occupation(I2S_CTLR_HP, 1);
+    const bool parked = i2s_platform_acquire_occupation(I2S_CTLR_HP, 0, "mm_i80_park") == ESP_OK;
+    struct ParkGuard {   // release instance 0 on EVERY path out of this function
+        bool on;
+        ~ParkGuard() { if (on) i2s_platform_release_occupation(I2S_CTLR_HP, 0); }
+    } parkGuard{parked};
+    // "No pin" for WR (kBusPinUnset), and for the spare bus lanes the driver parks on it: the
+    // peripheral insists on a GPIO number, a WS2812 strand reads none of these lines, and an
+    // input-only pad has no output driver. So WR is routed to SENSOR_VP (36), bonded on every
+    // classic package, where the matrix drives nothing and no usable GPIO is spent.
+    //
+    // DC gets NO such treatment, and the asymmetry is load-bearing. WR reaches the pad through the
+    // GPIO matrix (esp_rom_gpio_connect_out_signal), which is inert on a pad that cannot drive. DC
+    // is software-toggled: esp_lcd calls gpio_set_level on it for every transfer, and on an
+    // input-only pad that call fails, logs "GPIO output gpio_num error", and the log call itself
+    // aborts from that context. So an unset DC is refused by the driver before it reaches here.
+    constexpr uint16_t kWrSink = 36;
+    if (wrGpio == kBusPinUnset) wrGpio = kWrSink;
+    for (uint8_t i = 0; i < laneCount; i++) if (dataPins[i] == kBusPinUnset) dataPins[i] = wrGpio;
+    if (dcGpio == kBusPinUnset) {
+        s_lastError = "dcPin (DC) needs a real GPIO: the i80 bus toggles it in software every frame";
+        return false;
+    }
+#else
+    // LCD_CAM (S3 / P4 / S31): both control lines need a real pad. The driver refuses an unset one
+    // before calling here; this is the backstop that keeps an invalid number away from the ROM.
+    if (wrGpio == kBusPinUnset || dcGpio == kBusPinUnset) {
+        s_lastError = "clockPin (WR) and dcPin (DC) need a real GPIO on this chip";
+        return false;
+    }
+#endif
     // The shift-register expander needs the LCD_CAM backend: its ×8 frame (~145 KB) only fits in
     // PSRAM, and the classic ESP32's I2S-i80 backend cannot DMA from PSRAM at all (see buf[0]) —
     // it would fall back to internal RAM and fail the allocation, or worse, half-fit. Refuse it
@@ -576,6 +656,8 @@ bool i80Ws2812Init(I80Ws2812Handle&, const uint16_t*, uint8_t, uint16_t, uint16_
                    size_t, bool, uint8_t) {
     return false;
 }
+const char* i80Ws2812LastError() { return nullptr; }
+bool i80Ws2812SharedBusFree() { return false; }
 uint8_t* i80Ws2812Buffer(const I80Ws2812Handle&, uint8_t) { return nullptr; }
 size_t i80Ws2812BufferCapacity(const I80Ws2812Handle&) { return 0; }
 bool i80Ws2812Transmit(I80Ws2812Handle&, uint8_t, size_t) { return false; }

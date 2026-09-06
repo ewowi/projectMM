@@ -2007,6 +2007,8 @@ void freeHostBus(void*& impl) {
 
 }  // namespace
 
+const char* i80Ws2812LastError() { return nullptr; }   // the emulated bus never refuses for a cause
+bool i80Ws2812SharedBusFree() { return false; }        // and shares no peripheral, so never retries
 bool i80Ws2812Init(I80Ws2812Handle& h, const uint16_t* /*dataPins*/,
                    uint8_t /*laneCount*/, uint16_t /*wrGpio*/, uint16_t /*dcGpio*/,
                    size_t bufferBytes, bool wantSecondBuffer,

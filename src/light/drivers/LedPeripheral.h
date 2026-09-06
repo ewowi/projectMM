@@ -60,6 +60,13 @@ public:
     virtual bool powerOfTwoBus() const = 0;
     /// The status message when bus init fails on this peripheral.
     virtual const char* initFailMsg() const = 0;
+
+    /// True when a PREVIOUS init failed only because another module held a peripheral this backend
+    /// needs, and that peripheral is now free: the driver then rebuilds itself, so the loser of a
+    /// contended claim recovers without the user touching anything. Cheap enough for tick1s (a
+    /// registry read, never an init). Default false: a backend with nothing to share never retries,
+    /// which keeps a genuinely bad config from re-attempting once a second forever.
+    virtual bool busContentionCleared() const { return false; }
     /// Must the loopback self-test build a full-width bus (true) or can it run on a private 1-lane
     /// unit (false)? esp_lcd i80 / MoonI80 need the full width; Parlio can do a single lane.
     virtual bool loopbackFullWidth() const = 0;

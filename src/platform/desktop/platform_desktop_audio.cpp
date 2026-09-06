@@ -170,6 +170,10 @@ bool audioCaptureInit(AudioMicHandle& h, uint8_t deviceIndex, uint32_t sampleRat
     return true;
 }
 
+
+// The desktop captures from an OS device, which shares no peripheral with anything: never retries.
+bool audioMicSharedBusFree(MicMode) { return false; }
+
 size_t audioMicRead(AudioMicHandle& /*h*/, int32_t* out, size_t maxSamples) {
     if (!deviceOpen_ || out == nullptr) return 0;
     return ring_.pop(out, maxSamples);

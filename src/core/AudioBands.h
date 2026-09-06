@@ -48,15 +48,6 @@ inline void applyWindow(const int32_t* samples, size_t n, float* out) {
     }
 }
 
-// Group `nMag` FFT magnitudes (covering DC..Nyquist over `sampleRate`) into 16
-// log-spaced bands (0..255 each) and report the dominant peak (`peakHz` = its
-// frequency, `peakMag` = its 0..255 magnitude). Robust to nMag==0 (all zero).
-//
-// `noiseFloor` and `gain` condition the bands exactly like the level path
-// (AudioLevel.h): each band's scaled magnitude has `noiseFloor` subtracted (so a
-// quiet idle spectrum — the mic's own noise — gates to 0 instead of flickering
-// the LEDs) and is then multiplied by `gain`/16 (16 = unity) for live brightness
-// control. Same knobs, same meaning, both the level and the spectrum.
 /// The 17 bin-index edges of the 16 bands, `edge[b]..edge[b+1]` per band.
 ///
 /// A band is only a band if it OWNS bins. A pure geometric split (`edge[e] = nMag^(e/16)`, equal
@@ -72,7 +63,9 @@ inline void applyWindow(const int32_t* samples, size_t n, float* out) {
 /// answer at the bottom of the range: no split can separate 60 Hz from 80 Hz when they share a bin.
 ///
 /// Computed once per rate change, never per frame: 17 values, and the summing loop below costs the
-/// same `nMag` additions wherever the edges sit.
+/// same `nMag` additions wherever the edges sit. (The function itself is below kLowestAudibleHz,
+/// which its first edge depends on.)
+
 /// The lowest frequency the spectrum shows. Below this is infrasound: mains hum, a microphone's DC
 /// drift, footfall and traffic rumble, none of it audible and none of it music. At 22 kHz with a
 /// 1024-bin FFT the first band would otherwise cover 11-22 Hz and display that rumble as bass.
@@ -288,6 +281,18 @@ inline void magnitudesToBands(const float* mag, size_t nMag, uint32_t sampleRate
     // is exactly magToByte per band, so the two paths cannot disagree.
     if (cond) {
         float out[16];
+        // The gate sits AT the window floor, and the level path's kMuteMarginDb does NOT belong
+        // here. The two measure different quantities: a band reports the PEAK magnitude of its
+        // bins while the level reports the block's RMS, and a peak sits far above an RMS for the
+        // same sound, so the same margin in dB is a much larger concession on a band. Bench, a
+        // quiet room on a Dig-Next-2: at the window floor the spectrum reads flux 1-2, and a 20 dB
+        // margin takes it to 49-102 with onsets firing, which is the room's own noise displayed as
+        // music. A margin large enough to matter would have to be tuned per part, which is what
+        // the learner exists to avoid.
+        //
+        // The cost is real and accepted: a band below the window is primed once and then returns
+        // early, so its learned floor does not track a room that gets quieter still. That band is
+        // dark either way, and re-learning starts the moment anything audible arrives.
         cond->process(bandDb, out, dtMs, windowFloorDb(noiseFloor), windowSpanDb(gain), ratioN,
                       maxGainDb, learning, windowFloorDb(noiseFloor));
         for (uint8_t b = 0; b < 16; b++) bands[b] = bandDb[b] <= 0.0f ? 0 : dbToByte(out[b], noiseFloor, gain);

@@ -326,6 +326,11 @@ def snapshot(perf=None):
     """The full current-state measurement. `perf` is the tick/FPS block the KPI collector
     already gathered — passed in rather than re-measured, since it needs a running device."""
     head = _head()
+    # Both are module-level and describe THIS run, so a second snapshot() in one process must not
+    # inherit the first's claims: a target that could not be measured the second time would
+    # otherwise still report "yes" and carry a stale date.
+    MEASURED_THIS_RUN.clear()
+    MEASURED_DATES.clear()
     flash = measure_flash()          # populates MEASURED_DATES as a side effect, so call it first
     return {
         "commit": head,
@@ -527,7 +532,9 @@ def render_markdown(new, old):
             built = _built_label(k, new.get("measured", {}).get(k))
             L.append(f"| {k} | {_arrow(v, o.get('flash'), k, _kb)} | {cap_s} | {used} | {built} |")
         L += ["",
-              ("`Built: yes` was measured this run. `carried Nd` was NOT rebuilt and its number is "
+              ("`Built: yes` was measured this run. `carried (age?)` was not rebuilt either and "
+               "predates this record, so its age is unknown: it dates itself on the next build. "
+               "`carried Nd` was NOT rebuilt and its number is "
                f"N days old, so an absent delta says nothing about the change. **STALE** marks a "
                f"carry older than {STALE_AFTER_DAYS} days: the number has gone unchecked long "
                "enough that growth will surface later as one jump, blamed on whichever commit "
