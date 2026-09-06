@@ -179,6 +179,48 @@ The add-on runs an MQTT 3.1.1 broker on the HA VM at **`<HA-IP>:1883`**. It uses
 
 The Mosquitto add-on and the MQTT integration are separate: the add-on runs the broker; the integration is HA's *client* to it. HA usually auto-adds the MQTT integration on first add-on start; if not, **Settings → Devices & Services → Add Integration → MQTT**, host `core-mosquitto`, port `1883`, use the user credentials.
 
+#### Optional: reach a USB Zigbee coordinator from the VM
+
+Only relevant if you also run Zigbee devices. **Hyper-V has no USB passthrough**, so a Zigbee coordinator plugged into the Windows host cannot be handed to the HAOS VM the way it can on ProxMox or on a bare-metal Pi. The standard answer is to expose the coordinator's serial port over the network and point Zigbee2MQTT at that instead of at a COM port.
+
+Run a serial-to-TCP bridge on the host: it opens the COM port, listens on a TCP port, and copies bytes both ways. `ser2net` does this on Linux; on Windows a small pyserial script is enough. Whatever you use, it has to accept **one client at a time** (a Zigbee coordinator is single-consumer), run **115200 8N1 with no flow control**, and log the bytes moved in each direction per connection. That last one is not a nicety: it is what makes the failure below diagnosable at all.
+
+Then in the Zigbee2MQTT add-on configuration, replace the serial port with the host's LAN address:
+
+```yaml
+serial:
+  port: tcp://<host-lan-ip>:20108
+  adapter: zstack        # match the coordinator: zstack for CC2652/CC2531, ember for EFR32
+  baudrate: 115200
+```
+
+**Run the bridge as a service**, or a host reboot leaves Home Assistant with no Zigbee at all. [NSSM](https://nssm.cc/) wraps any executable as a Windows service:
+
+```powershell
+nssm install ZigbeeBridge "C:\zigbee-bridge\.venv\Scripts\python.exe" "-u C:\zigbee-bridge\serial_tcp_bridge.py --port COM9 --tcp 20108"
+nssm set ZigbeeBridge AppDirectory "C:\zigbee-bridge"
+nssm set ZigbeeBridge AppStdout "C:\zigbee-bridge\bridge.log"
+nssm set ZigbeeBridge AppStderr "C:\zigbee-bridge\bridge.log"
+nssm set ZigbeeBridge AppRotateFiles 1
+nssm set ZigbeeBridge AppExit Default Restart
+nssm set ZigbeeBridge Start SERVICE_AUTO_START
+```
+
+`AppExit Default Restart` earns its place at boot: if the service starts before the USB device has enumerated, the bridge exits and NSSM retries until the port appears.
+
+**Turn off USB selective suspend.** Windows powers down an idle USB port by default, and a Zigbee coordinator between messages looks idle. The device stays enumerated and the COM port stays open, so nothing anywhere reports an error; the coordinator just stops answering. Both controls have to be cleared, the power plan and the per-hub checkbox:
+
+```powershell
+powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+powercfg /setactive SCHEME_CURRENT
+Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable |
+  Where-Object { $_.InstanceName -match 'ROOT_HUB' } |
+  ForEach-Object { $_.Enable = $false; Set-CimInstance -InputObject $_ }
+```
+
+The `powercfg /hibernate off` in step 7 above matters here too, because it also disables Fast Startup. With Fast Startup on, **Shut down** resumes a saved kernel session rather than cold-booting, so it does not power-cycle a wedged coordinator. **Restart** does.
+
 Now jump back to [Adopt in Home Assistant](#adopt-in-home-assistant).
 
 ### Set up standalone Homebridge + Mosquitto
@@ -253,6 +295,8 @@ Now jump back to [Adopt in Homebridge](#adopt-in-homebridge).
 
 - **`mqtt_status` stuck on `connecting`** — the device can't reach the broker. Check the broker IP is your computer's *LAN* IP (not `127.0.0.1`, which the device can't route to), that the broker is actually listening on all interfaces (on Windows standalone Mosquitto, the `listener 1883 0.0.0.0` line above; the HA Mosquitto add-on already listens on all interfaces), and that the firewall isn't blocking `1883`.
 - **HA entities flap "unavailable" every few minutes** — the VM's network is dropping. Almost always the WiFi-bridge symptom noted in the HA install section: the HA VM is on a WiFi-bridged NIC that re-associates periodically. Move the HA VM to a wired external switch (Hyper-V / ProxMox / ESXi all support this), or run HAOS on a wired Pi. This is also what a battery of Zigbee / Wi-Fi routers with a bad channel plan looks like — worth checking the HA host's own connectivity first.
+- **Every Zigbee entity is `unavailable` and Zigbee2MQTT will not start**: work down the chain instead of restarting things. If `binary_sensor.zigbee2mqtt_bridge_connection_state` reads **`off`** rather than `unavailable`, MQTT is healthy and Home Assistant is receiving Zigbee2MQTT's own offline message, so neither the broker nor the integration is at fault. On a network coordinator (see [reach a USB Zigbee coordinator from the VM](#optional-reach-a-usb-zigbee-coordinator-from-the-vm)), read the bridge's log next: a connection logged as `to-serial 16 B / from-serial 0 B` means the bridge faithfully wrote Zigbee2MQTT's init and the coordinator answered nothing. That is a hung coordinator, not a software fault, and restarting the add-on, the bridge, or Windows will not clear it. **Unplug the coordinator, wait ten seconds, plug it back in, then restart the bridge service** with `Restart-Service ZigbeeBridge -Force` from an elevated PowerShell. That last step is not optional: a bridge that opens its serial port once at startup is still holding a handle to the device that was unplugged, and it will keep failing every connection until it is restarted. **Then restart the Zigbee2MQTT add-on as well.** While the bridge was unreachable the add-on will have failed its own adapter initialization and dropped into an error state, and its watchdog does not reliably bring it back, so it sits there stopped even once the bridge is healthy again. Turning off USB selective suspend is what stops the whole sequence recurring.
+- **Devices report briefly after each Zigbee2MQTT restart, then go quiet, and commands never arrive**: a different fault from the one above, and the one most often misread as a software problem. The coordinator powers up, starts its network, and then loses power again a short while later, typically once its radio begins transmitting. It stays enumerated as a serial port the whole time and still answers simple queries, so nothing in the operating system, the bridge or Zigbee2MQTT reports an error. The only visible symptom is that incoming reports stop and every outgoing command fails. **Move the coordinator to a different USB socket, or onto a powered hub that supplies its own current, before considering a re-flash.** Moving it counts as an unplug, so restart the bridge service and then the add-on afterwards, exactly as above, or the bridge keeps serving a handle to the socket the coordinator just left and nothing appears to improve. A socket whose power delivery has degraded can no longer hold a transmitting radio up, and that is far more common than a corrupted coordinator. If the devices then keep their pairings and the mesh reforms on its own, nothing was ever corrupted, which is also the sign that re-flashing would have been wasted effort.
 - **HA created two light entities with the same slug (`light.<slug>_<slug>`)** — a stale MQTT-discovery config is still retained on the broker. Delete the retained topic (`mosquitto_pub -h <broker> -t 'homeassistant/light/projectMM_<mac6>/config' -r -n`) and let the device republish; HA cleans up the entity within a few seconds.
 - **HA WLED integration fails with "Cannot connect", or the entity shows partial state** — HA reads two endpoints, both on the device's HTTP port (default **80** on ESP32, **8080** on desktop builds), so probe both:
 
