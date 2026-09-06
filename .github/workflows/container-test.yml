@@ -51,11 +51,18 @@ jobs:
 
       # The same packaging step release.yml's build-linux runs, so the .deb under test is built the
       # way a released one is rather than by a path that exists only here.
+      #
+      # `--tag latest`, NOT `--tag container-test`: compute_version maps `latest` to the rolling
+      # prerelease channel and treats every other tag as stable, carrying it through as the version
+      # verbatim. So a made-up tag becomes a made-up version, and dpkg-deb rejects it outright, since
+      # a Debian version must start with a digit. `latest` yields the real `<core>-dev.<N>` a rolling
+      # release builds, which is also the truer rehearsal. What isolates this run is the IMAGE tag
+      # and the RELEASE tag, both `container-test` and both set below.
       - name: Build + package Linux x64
         id: pkg
         run: |
           set -euo pipefail
-          V=$(uv run python moondeck/build/compute_version.py --tag container-test)
+          V=$(uv run python moondeck/build/compute_version.py --tag latest)
           echo "version=$V" >> "$GITHUB_OUTPUT"
           uv run moondeck/ci/package_desktop.py --version "$V"
           ls -la dist/
